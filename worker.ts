@@ -48,17 +48,21 @@ async function randomDelay(minMins: number, maxMins: number) {
 /**
  * Log action to database using correct Log model
  */
-async function logAction(userId: string, action: string, postUrl: string, comment?: string) {
+async function logAction(userId: string, action: string, postUrl: string, comment?: string, commentUrl?: string) {
     try {
         await prisma.log.create({
             data: { 
                 userId, 
                 action, 
                 postUrl,
-                comment: comment || null
+                comment: comment || null,
+                commentUrl: commentUrl || null
             }
         });
         console.log(`   📝 [LOG] ${action}`);
+        if (commentUrl) {
+            console.log(`   🔗 [LOG] Comment URL: ${commentUrl}`);
+        }
     } catch (error) {
         console.error('   ⚠️  Log error:', error);
     }
@@ -196,8 +200,9 @@ async function scrollAndCollectPosts(page: Page, maxScrolls: number = 8): Promis
 
 /**
  * OPTIMIZED: Post a comment with reduced delays but still human-like
+ * Returns: { success: boolean, commentUrl?: string }
  */
-async function postComment(postElement: any, commentText: string): Promise<boolean> {
+async function postComment(postElement: any, commentText: string, page: Page, postUrl: string): Promise<{ success: boolean, commentUrl?: string }> {
     try {
         console.log(`   💬 Posting comment...`);
 
@@ -217,7 +222,7 @@ async function postComment(postElement: any, commentText: string): Promise<boole
 
         if (!commentBtn) {
             console.log(`   ❌ Comment button not found`);
-            return false;
+            return { success: false };
         }
 
         await commentBtn.scrollIntoViewIfNeeded();
@@ -243,7 +248,7 @@ async function postComment(postElement: any, commentText: string): Promise<boole
 
         if (!editor) {
             console.log(`   ❌ Comment editor not found`);
-            return false;
+            return { success: false };
         }
 
         // Step 3: Type comment with optimized speed (still human-like)
@@ -271,21 +276,62 @@ async function postComment(postElement: any, commentText: string): Promise<boole
 
         if (!submitBtn) {
             console.log(`   ❌ Submit button not found or disabled`);
-            return false;
+            return { success: false };
         }
 
         await submitBtn.hover();
         await sleep(300 + Math.random() * 300); // Reduced from 500-1000ms
         await submitBtn.click();
-        await sleep(2000); // Reduced from 3000ms
+        await sleep(3000); // Wait longer for comment to appear in DOM
 
         console.log(`   ✅ Comment posted!`);
         await broadcastAction('✅ Comment posted successfully!');
-        return true;
+
+        // Step 5: Try to capture the comment URL
+        let commentUrl: string | undefined = undefined;
+        try {
+            // Wait for the comment to appear in the comments section
+            await sleep(2000);
+            
+            // LinkedIn comment URLs are typically in format:
+            // https://www.linkedin.com/feed/update/urn:li:activity:XXXXX/comments/
+            // Or can be found in the newly posted comment element
+            
+            // Try to find the newly posted comment (it will be the last one)
+            const commentElements = await page.$$('.comments-comment-item').catch(() => []);
+            if (commentElements.length > 0) {
+                const lastComment = commentElements[commentElements.length - 1];
+                
+                // Try to find permalink in the comment
+                const permalink = await lastComment.$('a[href*="comments"]').catch(() => null);
+                if (permalink) {
+                    const href = await permalink.getAttribute('href');
+                    if (href) {
+                        commentUrl = href.startsWith('http') ? href : `https://www.linkedin.com${href}`;
+                        console.log(`   🔗 Captured comment URL: ${commentUrl}`);
+                    }
+                }
+            }
+            
+            // Fallback: construct comment URL from post URL if we couldn't find it
+            if (!commentUrl && postUrl && postUrl.includes('/feed/update/')) {
+                // Extract the activity URN from the post URL
+                const urnMatch = postUrl.match(/urn:li:activity:(\d+)/);
+                if (urnMatch) {
+                    commentUrl = `https://www.linkedin.com/feed/update/${urnMatch[0]}/`;
+                    console.log(`   🔗 Constructed comment URL from post: ${commentUrl}`);
+                }
+            }
+        } catch (urlError: any) {
+            console.log(`   ⚠️  Could not capture comment URL: ${urlError.message}`);
+            // Non-fatal - comment was posted successfully
+        }
+
+        return { success: true, commentUrl };
 
     } catch (error: any) {
         console.log(`   ❌ Comment posting error: ${error.message}`);
-        return false;
+        return { success: false };
     }
 }
 
@@ -574,9 +620,9 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
 
             // STEP 11: ✅ POST THE COMMENT - GUARANTEED ATTEMPT
             console.log(`\n   🚀 [POSTING] Attempting to post comment...`);
-            const success = await postComment(bestPost.element, selectedComment.text);
+            const result = await postComment(bestPost.element, selectedComment.text, page, bestPost.postUrl);
 
-            if (success) {
+            if (result.success) {
                 totalCommentsPosted++;
                 
                 // ✅ SUCCESS LOGGING
@@ -587,13 +633,17 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
                 console.log(`   🎯 Keyword: "${keyword.keyword}"`);
                 console.log(`   📈 Post Reach: ${bestPost.likes} likes, ${bestPost.comments} comments`);
                 console.log(`   💬 Comment: "${selectedComment.text.substring(0, 60)}..."`);
+                if (result.commentUrl) {
+                    console.log(`   🔗 Comment Link: ${result.commentUrl}`);
+                }
 
-                // Log to database with full details
+                // Log to database with full details INCLUDING comment URL
                 await logAction(
                     userId, 
                     `✅ Commented on post for "${keyword.keyword}" (${bestPost.likes} likes, target: ${targetReach})`, 
                     bestPost.postUrl,
-                    selectedComment.text
+                    selectedComment.text,
+                    result.commentUrl
                 );
 
                 // Update keyword matches counter

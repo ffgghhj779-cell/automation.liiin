@@ -11,6 +11,9 @@ interface ActivityLog {
   action: string;
   status: 'Success' | 'Failed' | 'Pending';
   time: string;
+  postUrl?: string;
+  commentUrl?: string;
+  comment?: string;
 }
 
 interface ActivityFeedProps {
@@ -116,6 +119,34 @@ export default function ActivityFeed({ logs, maxHeight = '500px' }: ActivityFeed
                       >
                         {log.status}
                       </Badge>
+                      {/* Show comment link if available */}
+                      {log.commentUrl && (
+                        <>
+                          <span className="text-gray-300">•</span>
+                          <a
+                            href={log.commentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-semibold text-primary-600 hover:text-primary-700 hover:underline flex items-center gap-1"
+                          >
+                            🔗 View Comment
+                          </a>
+                        </>
+                      )}
+                      {/* Fallback to post link if no comment URL */}
+                      {!log.commentUrl && log.postUrl && log.postUrl !== 'N/A' && log.postUrl !== 'unknown' && (
+                        <>
+                          <span className="text-gray-300">•</span>
+                          <a
+                            href={log.postUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900 hover:underline flex items-center gap-1"
+                          >
+                            📄 View Post
+                          </a>
+                        </>
+                      )}
                     </div>
                   </div>
                 </motion.div>

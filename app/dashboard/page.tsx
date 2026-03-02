@@ -301,7 +301,15 @@ export default function Dashboard() {
             <Chart data={chartData} />
 
             {/* Activity Feed */}
-            <ActivityFeed logs={logs} />
+            <ActivityFeed logs={logs.map((log: any) => ({
+              id: log.id,
+              action: log.action,
+              status: log.action.includes('✅') ? 'Success' : log.action.includes('❌') ? 'Failed' : 'Pending',
+              time: log.timestamp,
+              postUrl: log.postUrl,
+              commentUrl: log.commentUrl,
+              comment: log.comment
+            }))} />
           </div>
         );
       case 'keywords':

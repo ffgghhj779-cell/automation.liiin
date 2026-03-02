@@ -72,14 +72,15 @@ model Comment {
 }
 
 model Log {
-  id        String   @id @default(uuid())
-  action    String
-  postUrl   String
-  comment   String?
-  timestamp DateTime @default(now())
+  id         String   @id @default(uuid())
+  action     String
+  postUrl    String
+  comment    String?
+  commentUrl String?
+  timestamp  DateTime @default(now())
   
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model AutoPost {
