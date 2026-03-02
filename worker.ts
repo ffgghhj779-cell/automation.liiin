@@ -26,6 +26,7 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
+import { broadcastScreenshot, broadcastAction, broadcastLog, broadcastStatus } from './lib/worker-broadcast';
 
 const prisma = new PrismaClient();
 
@@ -148,6 +149,7 @@ async function scrollAndCollectPosts(page: Page, maxScrolls: number = 8): Promis
     const seenUrls = new Set<string>();
 
     console.log(`   📜 Fast scroll initiated (${maxScrolls} scrolls)...`);
+    await broadcastAction(`Scrolling to load posts (${maxScrolls} scrolls)`);
 
     for (let i = 0; i < maxScrolls; i++) {
         // Get current posts
@@ -278,6 +280,7 @@ async function postComment(postElement: any, commentText: string): Promise<boole
         await sleep(2000); // Reduced from 3000ms
 
         console.log(`   ✅ Comment posted!`);
+        await broadcastAction('✅ Comment posted successfully!');
         return true;
 
     } catch (error: any) {
@@ -413,6 +416,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
     
     const launchTime = Date.now() - startTime;
     console.log(`   ⚡ Browser ready in ${launchTime}ms (ultra-fast mode enabled)`);
+    await broadcastStatus('🚀 Browser launched - starting automation');
 
     try {
         let totalCommentsPosted = 0;
@@ -426,6 +430,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
             console.log(`   ║ [${keywordIndex + 1}/${keywords.length}] Processing: "${keyword.keyword}"`);
             console.log(`   ╚════════════════════════════════════════════════════════════╝`);
             console.log(`   🎯 Target reach: ${targetReach} likes`);
+            await broadcastAction(`Processing keyword [${keywordIndex + 1}/${keywords.length}]: "${keyword.keyword}"`);
             console.log(`   💬 Keyword-specific comments: ${keyword.comments.length}`);
             console.log(`   📈 Historical matches: ${keyword.matches}`);
 
@@ -441,9 +446,11 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
             
             try {
                 // ⚡ INSTANT: Use domcontentloaded for immediate start
+                await broadcastAction(`Searching LinkedIn for: "${keyword.keyword}"`);
                 await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
                 await sleep(800); // Reduced from 1500ms - minimal wait
                 console.log(`   ✅ [SEARCH] Loaded instantly`);
+                await broadcastScreenshot(page, `LinkedIn search results for "${keyword.keyword}"`);
             } catch (navError: any) {
                 console.log(`   ❌ [SEARCH] Navigation failed: ${navError.message}`);
                 await logAction(userId, `❌ Search failed for keyword "${keyword.keyword}": Navigation error`, searchUrl);
@@ -484,6 +491,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
             });
 
             console.log(`   ✅ [FILTER] Found ${matchingPosts.length} posts matching criteria`);
+            await broadcastAction(`Found ${allPosts.length} posts, ${matchingPosts.length} match criteria`);
 
             // STEP 9: ✅ GUARANTEED POST SELECTION - Always select closest to target reach
             // PRIORITY: Exact match first, then closest match - NEVER SKIP
@@ -679,6 +687,7 @@ async function runOrchestrator() {
 
             console.log(`\n✅ USER ACTION DETECTED - System activated by user`);
             console.log(`👥 Found ${activeSettings.length} active user(s)\n`);
+            await broadcastStatus(`✅ Worker activated - processing ${activeSettings.length} user(s)`);
 
             // ✅ FRESH DATA: Fetch current keywords and settings for THIS session only
             for (const userSettings of activeSettings) {
