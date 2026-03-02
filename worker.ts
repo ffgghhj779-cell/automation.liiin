@@ -355,7 +355,7 @@ async function runPipelineForUser(userId: string, sessionCookie: string, setting
     const startTime = Date.now();
     
     const browser = await chromium.launch({ 
-        headless: false, // Non-headless for proper rendering in live viewer
+        headless: true, // Headless mode - browser runs invisibly on server, screenshots sent to platform
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
