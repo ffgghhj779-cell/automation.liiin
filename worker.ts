@@ -589,6 +589,20 @@ async function runOrchestrator() {
     console.log('  ✅ No auto-execution, no cached jobs, no background triggers');
     console.log('════════════════════════════════════════════════════════════\n');
 
+    // ✅ CRITICAL: Reset all systemActive flags on worker startup
+    // This ensures NO user is processed until they explicitly click "Start"
+    console.log('🧹 [STARTUP] Resetting all systemActive flags to prevent auto-execution...');
+    try {
+        const resetResult = await prisma.settings.updateMany({
+            where: { systemActive: true },
+            data: { systemActive: false }
+        });
+        console.log(`✅ [STARTUP] Reset ${resetResult.count} active sessions from previous runs`);
+        console.log('✅ [STARTUP] Clean state achieved - worker will ONLY run when user clicks "Start"\n');
+    } catch (error: any) {
+        console.error('❌ [STARTUP] Failed to reset systemActive flags:', error.message);
+    }
+
     while (true) {
         try {
             // ✅ FIXED: Check for ACTIVE users with systemActive=true ONLY
@@ -656,6 +670,15 @@ async function runOrchestrator() {
             await sleep(60000);
         }
     }
+}
+
+// ✅ SAFETY CHECK: Warn if worker is being run manually instead of via API
+const isManualRun = process.argv.some(arg => arg.includes('worker.ts') || arg.includes('tsx'));
+if (isManualRun) {
+    console.log('\n⚠️  WARNING: Worker started manually via command line!');
+    console.log('⚠️  For production, worker should be started via the dashboard "Start" button.');
+    console.log('⚠️  This will ensure proper user authentication and session isolation.');
+    console.log('⚠️  Continuing anyway for development/testing purposes...\n');
 }
 
 // Start the orchestrator
