@@ -38,6 +38,7 @@ model Settings {
   skipWeekends          Boolean @default(true)
   systemActive          Boolean @default(false)
   linkedinSessionCookie String  @default("")
+  platformUrl           String  @default("")
   
   userId                String  @unique
   user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)

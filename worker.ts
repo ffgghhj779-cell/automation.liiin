@@ -26,7 +26,7 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
-import { broadcastScreenshot, broadcastAction, broadcastLog, broadcastStatus } from './lib/worker-broadcast';
+import { broadcastScreenshot, broadcastAction, broadcastLog, broadcastStatus, setApiBaseUrl } from './lib/worker-broadcast';
 
 const prisma = new PrismaClient();
 
@@ -693,6 +693,14 @@ async function runOrchestrator() {
 
             console.log(`\n✅ USER ACTION DETECTED - System activated by user`);
             console.log(`👥 Found ${activeSettings.length} active user(s)\n`);
+            
+            // Auto-configure platform URL from settings or environment
+            if (activeSettings.length > 0 && activeSettings[0].platformUrl) {
+                setApiBaseUrl(activeSettings[0].platformUrl);
+            } else {
+                console.log(`   📡 Using auto-detected platform URL (environment-based)`);
+            }
+            
             await broadcastStatus(`✅ Worker activated - processing ${activeSettings.length} user(s)`);
 
             // ✅ FRESH DATA: Fetch current keywords and settings for THIS session only

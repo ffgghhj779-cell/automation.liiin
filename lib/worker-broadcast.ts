@@ -5,8 +5,43 @@
 
 import { Page } from 'playwright';
 
-// Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+// Auto-detect API URL based on environment
+function getApiBaseUrl(): string {
+  // 1. Check if explicitly set (for production deployments)
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  
+  // 2. Check if VERCEL_URL is set (automatic in Vercel deployments)
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  
+  // 3. Check if running on Render (RENDER_EXTERNAL_URL)
+  if (process.env.RENDER_EXTERNAL_URL) {
+    return process.env.RENDER_EXTERNAL_URL;
+  }
+  
+  // 4. Check if running on Railway (RAILWAY_STATIC_URL)
+  if (process.env.RAILWAY_STATIC_URL) {
+    return process.env.RAILWAY_STATIC_URL;
+  }
+  
+  // 5. Default to localhost for local development
+  return 'http://localhost:3000';
+}
+
+let API_BASE_URL = getApiBaseUrl();
+
+/**
+ * Update API URL from user settings (called from worker)
+ */
+export function setApiBaseUrl(url: string) {
+  if (url && url.trim()) {
+    API_BASE_URL = url;
+    console.log(`   📡 Platform URL set to: ${API_BASE_URL}`);
+  }
+}
 
 export interface BroadcastOptions {
   type: 'screenshot' | 'action' | 'log' | 'status' | 'error';
