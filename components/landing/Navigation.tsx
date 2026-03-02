@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Menu, X, Sparkles } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import NexoraLogo from '@/components/ui/NexoraLogo';
 
@@ -34,83 +34,55 @@ export default function Navigation() {
 
   return (
     <>
-      {/* Premium Navigation */}
+      {/* Elegant Dark Navigation */}
       <motion.nav
         initial={{ y: -100 }}
         animate={{ y: 0 }}
-        transition={{ duration: 0.6, ease: "easeOut" }}
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${
+        transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
           isScrolled 
-            ? 'bg-gray-900/95 backdrop-blur-xl border-b border-white/10 shadow-2xl shadow-black/50' 
-            : 'bg-transparent border-b border-white/5'
+            ? 'bg-[#0a0a0a]/95 backdrop-blur-xl border-b border-zinc-800/50' 
+            : 'bg-transparent border-b border-zinc-800/30'
         }`}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-20">
-            {/* Logo with Animation */}
-            <Link href="/" className="group relative">
-              <motion.div
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="relative"
-              >
-                <NexoraLogo size="md" showText={true} />
-                {/* Glow Effect */}
-                <div className="absolute inset-0 bg-primary-500/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-              </motion.div>
+            {/* Refined Logo */}
+            <Link href="/" className="group">
+              <NexoraLogo size="md" showText={true} />
             </Link>
 
-            {/* Desktop Navigation Links with Premium Styling */}
-            <div className="hidden md:flex items-center gap-2">
+            {/* Refined Desktop Navigation Links */}
+            <div className="hidden md:flex items-center gap-1">
               {[
                 { href: '#features', label: 'Features' },
                 { href: '#how-it-works', label: 'How It Works' },
                 { href: '#pricing', label: 'Pricing' },
-              ].map((link, index) => (
-                <motion.a
+              ].map((link) => (
+                <a
                   key={link.href}
                   href={link.href}
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4, delay: index * 0.1 }}
-                  className="relative px-4 py-2 text-sm font-semibold text-gray-300 hover:text-white transition-colors group"
+                  className="px-4 py-2 text-sm font-medium text-zinc-400 hover:text-white transition-colors"
                 >
-                  <span className="relative z-10">{link.label}</span>
-                  {/* Hover Background */}
-                  <div className="absolute inset-0 bg-gradient-to-r from-primary-500/10 to-secondary-500/10 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                  {/* Bottom Border */}
-                  <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-secondary-500 scale-x-0 group-hover:scale-x-100 transition-transform duration-300" />
-                </motion.a>
+                  {link.label}
+                </a>
               ))}
             </div>
 
-            {/* Desktop CTA with Premium Button */}
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.6, delay: 0.3 }}
-              className="hidden md:flex items-center gap-4"
-            >
+            {/* Refined Desktop CTA */}
+            <div className="hidden md:flex items-center gap-4">
               <Link
                 href="/login"
-                className="text-sm font-semibold text-gray-300 hover:text-white transition-colors px-4 py-2"
+                className="text-sm font-medium text-zinc-400 hover:text-white transition-colors"
               >
                 Sign In
               </Link>
               <Link href="/login">
-                <motion.button
-                  whileHover={{ scale: 1.05, boxShadow: "0 10px 30px rgba(99, 102, 241, 0.4)" }}
-                  whileTap={{ scale: 0.95 }}
-                  className="group relative px-6 py-2.5 bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-600 text-white font-bold rounded-xl transition-all duration-300 shadow-lg shadow-primary-500/20 overflow-hidden"
-                >
-                  <span className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-700" />
-                  <span className="relative flex items-center gap-2">
-                    <Sparkles className="w-4 h-4" />
-                    Get Started
-                  </span>
-                </motion.button>
+                <button className="px-6 py-2.5 bg-white hover:bg-zinc-100 text-black font-semibold rounded-xl transition-all duration-200">
+                  Get Started
+                </button>
               </Link>
-            </motion.div>
+            </div>
 
             {/* Mobile Menu Button with Animation */}
             <motion.button
@@ -147,64 +119,63 @@ export default function Navigation() {
         </div>
       </motion.nav>
 
-      {/* Premium Mobile Menu */}
+      {/* Refined Mobile Menu */}
       <AnimatePresence>
         {isMobileMenuOpen && (
           <>
-            {/* Backdrop with Blur */}
+            {/* Backdrop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              className="fixed inset-0 z-40 md:hidden bg-black/80 backdrop-blur-md"
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-40 md:hidden bg-black/60 backdrop-blur-sm"
               onClick={() => setIsMobileMenuOpen(false)}
             />
 
-            {/* Menu Panel with Slide Animation */}
+            {/* Menu Panel */}
             <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed top-20 right-0 bottom-0 z-50 w-80 md:hidden bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 border-l border-white/10 shadow-2xl overflow-y-auto"
+              className="fixed top-20 right-0 bottom-0 z-50 w-80 md:hidden bg-zinc-900/95 border-l border-zinc-800/50 shadow-2xl overflow-y-auto"
             >
               <div className="p-6 space-y-2">
                 {/* Navigation Links */}
                 {[
-                  { href: '#features', label: 'Features', icon: '✨' },
-                  { href: '#how-it-works', label: 'How It Works', icon: '⚙️' },
-                  { href: '#pricing', label: 'Pricing', icon: '💎' },
+                  { href: '#features', label: 'Features' },
+                  { href: '#how-it-works', label: 'How It Works' },
+                  { href: '#pricing', label: 'Pricing' },
                 ].map((link, index) => (
                   <motion.a
                     key={link.href}
                     href={link.href}
                     onClick={() => setIsMobileMenuOpen(false)}
-                    initial={{ opacity: 0, x: 50 }}
+                    initial={{ opacity: 0, x: 20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.3, delay: index * 0.1 }}
-                    className="block py-4 px-5 text-base font-semibold text-gray-300 hover:bg-white/5 hover:text-white rounded-xl transition-all duration-300 border border-transparent hover:border-white/10"
+                    className="block py-3 px-4 text-base font-medium text-zinc-400 hover:bg-zinc-800/50 hover:text-white rounded-xl transition-all"
                   >
-                    <span className="mr-3">{link.icon}</span>
                     {link.label}
                   </motion.a>
                 ))}
 
                 {/* Divider */}
-                <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent my-4" />
+                <div className="h-px bg-zinc-800/50 my-4" />
 
                 {/* Sign In Link */}
                 <motion.div
-                  initial={{ opacity: 0, x: 50 }}
+                  initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.3, delay: 0.3 }}
                 >
                   <Link
                     href="/login"
                     onClick={() => setIsMobileMenuOpen(false)}
-                    className="block py-4 px-5 text-base font-semibold text-gray-300 hover:bg-white/5 hover:text-white rounded-xl transition-all duration-300 border border-transparent hover:border-white/10"
+                    className="block py-3 px-4 text-base font-medium text-zinc-400 hover:bg-zinc-800/50 hover:text-white rounded-xl transition-all"
                   >
-                    🔐 Sign In
+                    Sign In
                   </Link>
                 </motion.div>
 
@@ -216,9 +187,8 @@ export default function Navigation() {
                   className="pt-4"
                 >
                   <Link href="/login" onClick={() => setIsMobileMenuOpen(false)}>
-                    <button className="w-full px-6 py-4 bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-600 text-white font-bold rounded-xl transition-all shadow-lg shadow-primary-500/30 flex items-center justify-center gap-2">
-                      <Sparkles className="w-5 h-5" />
-                      Get Started Free
+                    <button className="w-full px-6 py-4 bg-white hover:bg-zinc-100 text-black font-semibold rounded-xl transition-all">
+                      Get Started
                     </button>
                   </Link>
                 </motion.div>
