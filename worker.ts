@@ -340,111 +340,114 @@ async function processKeyword(
 async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser page not initialized');
 
-  const posts: PostCandidate[] = [];
-
   try {
-    // Navigate to LinkedIn search
     const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
     console.log(`   Navigating to: ${searchUrl}`);
 
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Wait for search results to load — try multiple known LinkedIn search result containers
+    // Wait up to 10 seconds for any post-like container to appear
     await Promise.race([
-      page.waitForSelector('[data-view-name="search-entity-result-universal-template"]', { timeout: 8000 }).catch(() => null),
-      page.waitForSelector('.search-results-container', { timeout: 8000 }).catch(() => null),
-      page.waitForSelector('div.feed-shared-update-v2', { timeout: 8000 }).catch(() => null),
-      page.waitForSelector('.occludable-update', { timeout: 8000 }).catch(() => null),
+      page.waitForSelector('a[href*="/feed/update/"]', { timeout: 10000 }).catch(() => null),
+      page.waitForSelector('a[href*="/activity/"]', { timeout: 10000 }).catch(() => null),
+      page.waitForSelector('.search-results-container', { timeout: 10000 }).catch(() => null),
     ]);
-    await sleep(2000); // Let dynamic content settle
+    // Allow dynamic JS rendering to settle
+    await sleep(3000);
 
-    // Take screenshot
-    await broadcastScreenshot(page, `Searching for: ${keyword}`);
+    await broadcastScreenshot(page, `Searching LinkedIn for: ${keyword}`);
 
-    // --- Strategy 1: Try modern LinkedIn search result containers ---
-    let postElements = await page.$$('[data-view-name="search-entity-result-universal-template"]');
-    if (postElements.length === 0) postElements = await page.$$('.occludable-update');
-    if (postElements.length === 0) postElements = await page.$$('div.feed-shared-update-v2');
-    if (postElements.length === 0) postElements = await page.$$('.update-components-actor');
+    // Run extraction entirely inside the browser — immune to Playwright element handle issues
+    const rawPosts = await page.evaluate(() => {
+      const results: { url: string; likes: number; comments: number }[] = [];
+      const seen = new Set<string>();
 
-    console.log(`   Found ${postElements.length} post elements on page`);
+      // Find all post article containers (LinkedIn wraps each post in a <li> or <div>)
+      // Grab every anchor that points to a feed update or activity
+      const allLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(
+        'a[href*="/feed/update/"], a[href*="/activity/"]'
+      ));
 
-    for (const postElement of postElements) {
-      try {
-        // --- Extract post URL: try multiple link patterns ---
-        let postUrl: string | null = null;
+      for (const link of allLinks) {
+        let href = link.getAttribute('href') || '';
+        if (!href) continue;
 
-        // Pattern 1: direct feed update links
-        const link1 = await postElement.$('a[href*="/feed/update/"]');
-        if (link1) postUrl = await link1.getAttribute('href');
+        // Normalize
+        if (!href.startsWith('http')) href = 'https://www.linkedin.com' + href;
+        href = href.split('?')[0]; // Strip query params
 
-        // Pattern 2: activity links
-        if (!postUrl) {
-          const link2 = await postElement.$('a[href*="/activity/"]');
-          if (link2) postUrl = await link2.getAttribute('href');
+        if (seen.has(href)) continue;
+        seen.add(href);
+
+        // Walk up the DOM to find the post container
+        let container: HTMLElement | null = link;
+        for (let i = 0; i < 10; i++) {
+          container = container?.parentElement ?? null;
+          if (!container) break;
+          // Stop at a likely post-level element
+          if (
+            container.tagName === 'LI' ||
+            container.classList.contains('occludable-update') ||
+            container.classList.contains('feed-shared-update-v2') ||
+            container.hasAttribute('data-view-name')
+          ) break;
         }
 
-        // Pattern 3: any app-aware-link within the post
-        if (!postUrl) {
-          const link3 = await postElement.$('a.app-aware-link');
-          if (link3) postUrl = await link3.getAttribute('href');
-        }
-
-        if (!postUrl) continue;
-
-        // Normalize URL
-        if (!postUrl.includes('http')) postUrl = `https://www.linkedin.com${postUrl}`;
-        // Clean query params from URL to get canonical post link
-        postUrl = postUrl.split('?')[0];
-
-        // --- Extract engagement metrics ---
         let likes = 0;
         let comments = 0;
 
-        // Pattern 1: social-details-social-counts (classic)
-        const socialCounts = await postElement.$('ul.social-details-social-counts');
-        if (socialCounts) {
-          const likesText = await socialCounts.$eval(
-            'button[aria-label*="reaction"], button[aria-label*="like"]',
-            (el: Element) => (el as HTMLElement).textContent?.trim() || '0'
-          ).catch(() => '0');
+        if (container) {
+          // Find all buttons in the container and inspect them
+          const buttons = Array.from(container.querySelectorAll('button'));
+          for (const btn of buttons) {
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const text = (btn.textContent || '').replace(/[^0-9kKmM.,]/g, '').trim();
 
-          const commentsText = await socialCounts.$eval(
-            'button[aria-label*="comment"]',
-            (el: Element) => (el as HTMLElement).textContent?.trim() || '0'
-          ).catch(() => '0');
+            const parse = (t: string): number => {
+              if (!t) return 0;
+              const clean = t.toLowerCase().replace(',', '.');
+              if (clean.includes('k')) return Math.round(parseFloat(clean) * 1000);
+              if (clean.includes('m')) return Math.round(parseFloat(clean) * 1000000);
+              return parseInt(clean) || 0;
+            };
 
-          likes = parseEngagementNumber(likesText);
-          comments = parseEngagementNumber(commentsText);
+            if (label.includes('reaction') || label.includes('like')) {
+              likes = parse(text) || likes;
+            }
+            if (label.includes('comment')) {
+              comments = parse(text) || comments;
+            }
+          }
+
+          // Also check span/text nodes near social-details
+          const socialSpans = container.querySelectorAll<HTMLElement>(
+            '.social-details-social-counts button, [class*="social-count"] button'
+          );
+          socialSpans.forEach(btn => {
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const num = parseInt((btn.textContent || '').replace(/[^0-9]/g, '')) || 0;
+            if (label.includes('reaction') || label.includes('like')) likes = likes || num;
+            if (label.includes('comment')) comments = comments || num;
+          });
         }
 
-        // Pattern 2: social-action-bar (newer LinkedIn)
-        if (likes === 0 && comments === 0) {
-          const likeBtn = await postElement.$('[aria-label*="reaction"], [aria-label*="Like"]');
-          const commentBtn = await postElement.$('[aria-label*="comment"], [aria-label*="Comment"]');
-          if (likeBtn) likes = parseEngagementNumber((await likeBtn.textContent() || '').trim());
-          if (commentBtn) comments = parseEngagementNumber((await commentBtn.textContent() || '').trim());
-        }
-
-        posts.push({ url: postUrl, likes, comments, distance: 0 });
-
-      } catch (error) {
-        continue; // Skip invalid posts silently
+        results.push({ url: href, likes, comments });
       }
-    }
 
-    console.log(`   Extracted ${posts.length} valid posts with engagement data`);
-    if (posts.length > 0) {
-      posts.slice(0, 3).forEach((p, i) => {
-        console.log(`   [${i + 1}] ${p.url} | 👍 ${p.likes} | 💬 ${p.comments}`);
-      });
-    }
+      return results;
+    });
+
+    console.log(`   Extracted ${rawPosts.length} valid posts with engagement data`);
+    rawPosts.slice(0, 3).forEach((p, i) => {
+      console.log(`   [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | ${p.url}`);
+    });
+
+    return rawPosts.map(p => ({ ...p, distance: 0 }));
 
   } catch (error: any) {
     console.error(`   ❌ Error searching LinkedIn:`, error.message);
+    return [];
   }
-
-  return posts;
 }
 
 async function postAndVerifyComment(postUrl: string, commentText: string): Promise<{ success: boolean; commentUrl?: string; reason?: string }> {
