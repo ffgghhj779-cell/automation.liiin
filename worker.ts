@@ -374,14 +374,23 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       // 3. /feed/update/urn:li:ugcPost:XXXXXX/
       const allLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'));
 
-      // Filter to only post links
+      // Filter to only post links — broad catch for ALL LinkedIn post URL patterns:
+      // /posts/xxx-activity-NNN/ (profile post links)
+      // /feed/update/urn:li:activity:NNN/ (classic)
+      // /feed/update/urn:li:ugcPost:NNN/
+      // /feed/update/urn:li:share:NNN/
+      // urn:li:activity:NNN (raw URN in href)
+      // /pulse/xxx/ (articles)
       const postLinks = allLinks.filter(a => {
         const h = a.getAttribute('href') || '';
         return (
-          (h.includes('/posts/') && h.includes('activity')) ||
-          h.includes('/feed/update/urn:li:activity') ||
-          h.includes('/feed/update/urn:li:ugcPost') ||
-          h.includes('/feed/update/urn:li:share')
+          h.includes('/posts/') ||
+          h.includes('/feed/update/') ||
+          h.includes('urn%3Ali%3Aactivity') ||
+          h.includes('urn:li:activity') ||
+          h.includes('urn:li:ugcPost') ||
+          h.includes('urn:li:share') ||
+          (h.includes('/pulse/') && h.length > 20)
         );
       });
 
@@ -465,15 +474,20 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     const diagInfo = await page.evaluate(() => ({
       totalLinks: (window as any).__debugLinkCount || 0,
       postLinks: (window as any).__debugPostLinkCount || 0,
+      sampleHrefs: (window as any).__debugSampleHrefs || [],
       url: window.location.href
     }));
 
     console.log(`   📊 Page diagnostics: ${diagInfo.totalLinks} total links, ${diagInfo.postLinks} post links found`);
     console.log(`   📍 Current URL: ${diagInfo.url}`);
+    console.log(`   🔗 Sample hrefs on page (first 25):`);
+    (diagInfo.sampleHrefs as string[]).forEach((h: string, i: number) => {
+      console.log(`      [${i + 1}] ${h}`);
+    });
     console.log(`   Extracted ${rawPosts.length} posts with engagement data`);
 
     if (rawPosts.length === 0) {
-      console.log(`   ⚠️  Zero posts extracted. Possible causes:`);
+      console.log(`   ⚠️  Zero posts extracted. Check the sample hrefs above to identify the correct URL pattern.`);
       console.log(`      - LinkedIn is showing a CAPTCHA or verification page`);
       console.log(`      - Session cookie has expired`);
       console.log(`      - Search results are empty for this keyword`);
