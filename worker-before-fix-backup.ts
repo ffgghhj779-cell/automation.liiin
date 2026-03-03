@@ -393,7 +393,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     // Capture state for diagnostics
     await broadcastScreenshot(page, `Search: ${keyword}`);
 
-    // SUPER SCRAPER SCRIPT - Ultra-resilient extraction with multiple fallback strategies
+    // SUPER SCRAPER SCRIPT - Extremely resilient extraction
     const superScraper = `
       (function() {
         var results = [];
@@ -410,112 +410,68 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           return Math.round(n);
         }
 
-        // --- PHASE 1: Container-based extraction (Primary Method) ---
-        var containers = Array.from(document.querySelectorAll('.reusable-search__result-container, .entity-result, [data-chameleon-result-urn], .search-results__cluster-item, .feed-shared-update-v2, [data-testid="update-card"], li.reusable-search__result-container, .search-results-container li'));
+        // --- PHASE 1: Container-based extraction (The Best Way) ---
+        var containers = Array.from(document.querySelectorAll('.reusable-search__result-container, .entity-result, [data-chameleon-result-urn], .search-results__cluster-item, .feed-shared-update-v2, [data-testid="update-card"]'));
         
         containers.forEach(function(container) {
-          // Try multiple link patterns
-          var link = container.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"], a.app-aware-link[href*="linkedin.com"]');
+          var link = container.querySelector('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"]');
           if (!link) {
             var allLinks = Array.from(container.querySelectorAll('a[href]'));
             link = allLinks.find(function(a) { 
                var h = a.getAttribute('href') || '';
-               return h.includes('/posts/') || h.includes('/feed/update/') || h.includes('activity') || h.includes('ugcPost');
+               return h.includes('/posts/') || h.includes('/feed/update/') || h.includes('activity');
             });
           }
           if (!link) return;
 
           var href = link.getAttribute('href') || '';
           if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-          href = href.split('?')[0].split('#')[0]; // Remove query params and anchors
+          href = href.split('?')[0].split('&')[0];
           
           if (seenUrls[href]) return;
           seenUrls[href] = true;
 
           var likes = 0, comments = 0;
-          
-          // Enhanced engagement extraction - try multiple selectors
-          var socialElements = Array.from(container.querySelectorAll('button, span[aria-label], .social-details-social-counts__item, .entity-result__content-summary, .social-details-social-counts__reactions, .social-details-social-counts__comments, [class*="social-counts"]'));
-          
+          var socialElements = Array.from(container.querySelectorAll('button, span[aria-label], .social-details-social-counts__item, .entity-result__content-summary'));
           socialElements.forEach(function(el) {
             var label = (el.getAttribute('aria-label') || '').toLowerCase();
             var text = (el.textContent || '').toLowerCase();
-            
-            // Look for reactions/likes
             if (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1 || text.indexOf('reaction') !== -1 || text.indexOf('like') !== -1) {
-              var extracted = parseNum(label) || parseNum(text);
-              if (extracted > likes) likes = extracted;
+              likes = Math.max(likes, parseNum(label) || parseNum(text));
             }
-            
-            // Look for comments
             if (label.indexOf('comment') !== -1 || text.indexOf('comment') !== -1) {
-              var extracted = parseNum(label) || parseNum(text);
-              if (extracted > comments) comments = extracted;
+              comments = Math.max(comments, parseNum(label) || parseNum(text));
             }
           });
-          
           results.push({ url: href, likes: likes, comments: comments, method: 'container' });
         });
 
         // --- PHASE 2: Link-based Fallback (If containers fail) ---
         if (results.length === 0) {
-          console.log('[Scraper] Phase 1 found 0 posts, trying Phase 2 fallback...');
-          var allLinks = Array.from(document.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"], a[href*="ugcPost"]'));
-          
+          var allLinks = Array.from(document.querySelectorAll('a[href*="/posts/"], a[href*="/feed/update/"], a[href*="activity"]'));
           allLinks.forEach(function(link) {
             var href = link.getAttribute('href') || '';
             if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-            href = href.split('?')[0].split('#')[0];
+            href = href.split('?')[0].split('&')[0];
             if (seenUrls[href]) return;
             seenUrls[href] = true;
 
             // Try to find engagement by going up to a common parent
             var parent = link;
-            for (var i = 0; i < 10; i++) {
+            for (var i = 0; i < 8; i++) {
               if (!parent.parentElement) break;
               parent = parent.parentElement;
-              if (parent.tagName === 'LI' || parent.tagName === 'ARTICLE' || parent.classList.contains('entity-result') || parent.classList.contains('reusable-search__result-container')) break;
+              if (parent.tagName === 'LI' || parent.tagName === 'ARTICLE' || parent.classList.contains('entity-result')) break;
             }
             
             var l = 0, c = 0;
             var text = parent.innerText || '';
-            
-            // Multiple regex patterns for reactions
             var rMatch = text.match(/([\\d\\.\\,km]+)\\s*(reaction|like)/i);
             if (rMatch) l = parseNum(rMatch[1]);
-            if (l === 0) {
-              rMatch = text.match(/(\\d+[\\.,]?\\d*)\\s*👍/);
-              if (rMatch) l = parseNum(rMatch[1]);
-            }
-            
-            // Multiple regex patterns for comments
             var cMatch = text.match(/([\\d\\.\\,km]+)\\s*comment/i);
             if (cMatch) c = parseNum(cMatch[1]);
-            if (c === 0) {
-              cMatch = text.match(/(\\d+[\\.,]?\\d*)\\s*💬/);
-              if (cMatch) c = parseNum(cMatch[1]);
-            }
             
             results.push({ url: href, likes: l, comments: c, method: 'link-fallback' });
-          });
-        }
-        
-        // --- PHASE 3: Aggressive scraping if still nothing found ---
-        if (results.length === 0) {
-          console.log('[Scraper] Phase 2 found 0 posts, trying Phase 3 aggressive scraping...');
-          // Just grab ANY LinkedIn post links we can find
-          var desperateLinks = Array.from(document.querySelectorAll('a[href]'));
-          desperateLinks.forEach(function(link) {
-            var href = link.getAttribute('href') || '';
-            if (href.includes('linkedin.com') && (href.includes('post') || href.includes('activity') || href.includes('update'))) {
-              if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-              href = href.split('?')[0].split('#')[0];
-              if (seenUrls[href]) return;
-              seenUrls[href] = true;
-              
-              // Default to 0 engagement if we can't extract
-              results.push({ url: href, likes: 0, comments: 0, method: 'desperate-fallback' });
-            }
           });
         }
 
@@ -523,11 +479,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           containerCount: containers.length,
           totalExtracted: results.length,
           pageTitle: document.title,
-          noResultsFound: !!document.querySelector('.search-relevance-no-results, .artdeco-empty-state'),
-          methods: results.reduce(function(acc, r) {
-            acc[r.method] = (acc[r.method] || 0) + 1;
-            return acc;
-          }, {})
+          noResultsFound: !!document.querySelector('.search-relevance-no-results, .artdeco-empty-state')
         };
 
         return results;
@@ -544,31 +496,18 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     console.log(`\n📊 Scraper Metrics:`);
     console.log(`   Containers detected: ${diag.containerCount || 0}`);
     console.log(`   Posts extracted: ${diag.totalExtracted || 0}`);
-    if (diag.methods) {
-      console.log(`   Extraction methods used:`);
-      Object.keys(diag.methods).forEach(method => {
-        console.log(`      ${method}: ${diag.methods[method]} posts`);
-      });
-    }
     if (diag.noResultsFound) console.log(`   ⚠️ LinkedIn reports: "No results found"`);
 
     if (rawPosts.length > 0) {
-      console.log(`   ✅ Sample posts found:`);
+      console.log(`   Sample matching posts:`);
       rawPosts.slice(0, 5).forEach((p, i) => {
-        console.log(`      [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | Method: ${p.method}`);
-        console.log(`          URL: ${p.url.substring(0, 80)}...`);
+        console.log(`      [${i + 1}] 👍 ${p.likes} | 💬 ${p.comments} | ${p.url} (${p.method})`);
       });
     } else {
-      console.log(`   ❌ No posts found for this keyword.`);
+      console.log(`   ⚠️ No posts found for this keyword.`);
       // Check for CAPTCHA
       const hasCaptcha = await page.evaluate('document.body.innerText.includes("CAPTCHA") || !!document.querySelector("iframe[src*=\'captcha\']")');
       if (hasCaptcha) console.log(`   🚨 CAPTCHA detected! Automation blocked.`);
-      
-      // Additional diagnostics
-      const pageUrl = page.url();
-      const pageTitle = await page.title();
-      console.log(`   📄 Current page: ${pageTitle}`);
-      console.log(`   🔗 URL: ${pageUrl}`);
     }
 
     return rawPosts.map(p => ({ ...p, distance: 0 }));
@@ -592,110 +531,54 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
 
     // Navigate to post
     await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await sleep(3000); // Give page time to fully load
+    await sleep(2000);
 
     await broadcastScreenshot(page, 'Navigated to post');
 
-    // Try multiple comment button selectors
-    const commentButtonSelectors = [
-      'button[aria-label*="Comment"]',
-      'button.comment-button',
-      'button[data-control-name="comment"]',
-      '.social-actions-button--comment'
-    ];
-
-    let commentButton = null;
-    for (const selector of commentButtonSelectors) {
-      commentButton = await page.$(selector).catch(() => null);
-      if (commentButton) {
-        console.log(`   ✅ Found comment button using: ${selector}`);
-        break;
-      }
-    }
-
+    // Click comment button
+    const commentButton = await page.$('button[aria-label*="Comment"]');
     if (!commentButton) {
-      await broadcastScreenshot(page, 'Comment button not found');
-      return { success: false, reason: 'Comment button not found (tried multiple selectors)' };
+      return { success: false, reason: 'Comment button not found' };
     }
 
     await commentButton.click();
-    await sleep(2000); // Wait for comment box to expand
+    await sleep(1000);
 
-    // Wait for comment editor - try multiple selectors
-    const editorSelectors = [
-      'div.ql-editor[contenteditable="true"]',
-      '.comments-comment-texteditor',
-      'div[contenteditable="true"][role="textbox"]',
-      '.comments-comment-box__form textarea',
-      'div[data-placeholder*="comment"]'
-    ];
+    // Wait for comment editor
+    const editorSelector = 'div.ql-editor[contenteditable="true"]';
+    await page.waitForSelector(editorSelector, { timeout: 10000 });
 
-    let editor = null;
-    for (const selector of editorSelectors) {
-      try {
-        await page.waitForSelector(selector, { timeout: 5000 });
-        editor = await page.$(selector);
-        if (editor) {
-          console.log(`   ✅ Found comment editor using: ${selector}`);
-          break;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-
+    const editor = await page.$(editorSelector);
     if (!editor) {
-      await broadcastScreenshot(page, 'Comment editor not found');
-      return { success: false, reason: 'Comment editor not found (tried multiple selectors)' };
+      return { success: false, reason: 'Comment editor not found' };
     }
 
-    // Type comment
-    console.log(`   ⌨️  Typing comment (${commentText.length} characters)...`);
+    // Type comment (character by character for visibility)
+    console.log(`   Typing comment...`);
     await editor.click();
-    await sleep(500);
-    await page.keyboard.type(commentText, { delay: 30 }); // Faster typing
-    await sleep(1500);
+    await page.keyboard.type(commentText, { delay: 50 }); // 50ms delay between characters
+    await sleep(1000);
 
     await broadcastScreenshot(page, 'Comment typed');
 
-    // Submit comment - try multiple selectors
-    const submitSelectors = [
-      'button.comments-comment-box__submit-button:not([disabled])',
-      'button[type="submit"]:not([disabled])',
-      '.comments-comment-box__submit-button--cr',
-      'button.comments-comment-box-comment__submit-button'
-    ];
-
-    let submitButton = null;
-    for (const selector of submitSelectors) {
-      submitButton = await page.$(selector).catch(() => null);
-      if (submitButton) {
-        const isDisabled = await submitButton.evaluate(el => el.hasAttribute('disabled'));
-        if (!isDisabled) {
-          console.log(`   ✅ Found enabled submit button using: ${selector}`);
-          break;
-        }
-      }
-      submitButton = null;
-    }
-
+    // Submit comment
+    const submitButton = await page.$('button.comments-comment-box__submit-button:not([disabled])');
     if (!submitButton) {
-      await broadcastScreenshot(page, 'Submit button not found or disabled');
       return { success: false, reason: 'Submit button not found or disabled' };
     }
 
-    console.log(`   📤 Submitting comment...`);
+    console.log(`   Submitting comment...`);
     await submitButton.click();
-    await sleep(2000); // Initial wait
+    await sleep(3000); // Wait for LinkedIn to process
 
-    await broadcastScreenshot(page, 'Comment submitted - waiting for verification');
+    await broadcastScreenshot(page, 'Comment submitted');
 
     // Verify comment appears in DOM
+    console.log(`   Verifying comment in DOM...`);
     const verificationResult = await verifyCommentInDOM(commentText);
 
     if (!verificationResult.found) {
-      await broadcastScreenshot(page, 'Comment verification FAILED');
-      return { success: false, reason: 'Comment not found in DOM after submission - may have been blocked or failed' };
+      return { success: false, reason: 'Comment not found in DOM after submission' };
     }
 
     console.log(`   ✅ Comment verified in DOM!`);
@@ -710,7 +593,6 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
 
   } catch (error: any) {
     console.error(`   ❌ Error posting comment:`, error.message);
-    await broadcastScreenshot(page, `Error: ${error.message}`).catch(() => {});
     return { success: false, reason: error.message };
   }
 }
@@ -719,57 +601,25 @@ async function verifyCommentInDOM(commentText: string): Promise<{ found: boolean
   if (!page) return { found: false };
 
   try {
-    console.log(`   🔍 Verifying comment appears in DOM...`);
     const startTime = Date.now();
-    const maxWaitTime = 25000; // Wait up to 25 seconds for comment to appear (LinkedIn can be slow)
+    const maxWaitTime = 15000; // Wait up to 15 seconds for comment to appear dynamically
 
-    // Use a snippet of the comment for matching (first 50 chars) to be more flexible
-    const commentSnippet = commentText.substring(0, 50).toLowerCase().trim();
-    console.log(`   Looking for snippet: "${commentSnippet}"`);
-
-    let attemptCount = 0;
     while (Date.now() - startTime < maxWaitTime) {
-      attemptCount++;
-      await sleep(2000); // Check every 2 seconds
+      // Small interval between polls
+      await sleep(1000);
 
-      // Try multiple selectors for comment items
-      const commentSelectors = [
-        'div.comments-comment-item',
-        '.comments-comment-item-content-body',
-        'article.comments-comment-item',
-        '[data-id*="comment"]',
-        '.comments-comment-item__main-content'
-      ];
+      const commentElements = await page.$$('div.comments-comment-item');
 
-      for (const selector of commentSelectors) {
-        const commentElements = await page.$$(selector).catch(() => []);
-        
-        if (commentElements.length > 0) {
-          console.log(`   📊 Attempt ${attemptCount}: Found ${commentElements.length} comment elements using selector "${selector}"`);
-          
-          // Check last 10 comments (should include ours if recently posted)
-          const recentComments = commentElements.slice(-10);
-          
-          for (const commentElement of recentComments) {
-            const text = await commentElement.textContent().catch(() => '');
-            const textLower = text.toLowerCase().trim();
-            
-            // Match using snippet OR full text
-            if (textLower.includes(commentSnippet) || text.includes(commentText)) {
-              console.log(`   ✅ VERIFIED! Comment found in DOM after ${Math.round((Date.now() - startTime) / 1000)}s`);
-              return { found: true };
-            }
-          }
+      for (const commentElement of commentElements) {
+        const text = await commentElement.textContent();
+        if (text && text.includes(commentText)) {
+          return { found: true };
         }
       }
-      
-      console.log(`   ⏳ Not found yet, waiting... (${Math.round((Date.now() - startTime) / 1000)}s elapsed)`);
     }
 
-    console.log(`   ❌ Comment not found in DOM after ${maxWaitTime / 1000}s`);
     return { found: false };
-  } catch (error: any) {
-    console.log(`   ❌ Verification error: ${error.message}`);
+  } catch (error) {
     return { found: false };
   }
 }
@@ -817,52 +667,38 @@ function selectBestPost(
   allPosts: PostCandidate[],
   settings: WorkerSettings
 ): PostCandidate | null {
-  // IMPROVED LOGIC: If we have filtered posts that match criteria, use them.
-  // If NO posts match strict criteria, use the best available post anyway (don't skip posting!)
-  
-  let postsToConsider: PostCandidate[] = [];
-  let selectionMode = '';
-  
-  if (filteredPosts.length > 0) {
-    // We have posts that match criteria perfectly
-    postsToConsider = filteredPosts;
-    selectionMode = 'EXACT MATCH';
-    console.log(`   ✅ Found ${filteredPosts.length} posts matching criteria (${settings.minLikes}-${settings.maxLikes} likes, ${settings.minComments}-${settings.maxComments} comments)`);
-  } else if (allPosts.length > 0) {
-    // No posts match strict criteria, but we have SOME posts - use them anyway!
-    postsToConsider = allPosts;
-    selectionMode = 'BEST AVAILABLE (relaxed criteria)';
-    console.log(`   ⚠️  No posts matched strict criteria. Using best available from ${allPosts.length} posts.`);
-    console.log(`   📊 Criteria was: ${settings.minLikes}-${settings.maxLikes} likes, ${settings.minComments}-${settings.maxComments} comments`);
-  } else {
-    // Absolutely no posts found at all
-    console.log(`   ❌ No posts found at all for this keyword.`);
+  // We strictly need to pick from filtered posts as they are already within Min and Max.
+  // If no filtered posts exist, return null.
+  if (filteredPosts.length === 0) {
+    console.log(`   ⚠️  No posts matched reach criteria. (Found ${allPosts.length} total, but none within ${settings.minLikes}-${settings.maxLikes} likes & ${settings.minComments}-${settings.maxComments} comments)`);
+    if (allPosts.length > 0) {
+      const bestCandidate = allPosts.sort((a, b) => (b.likes + b.comments) - (a.likes + a.comments))[0];
+      console.log(`      Best post found had 👍 ${bestCandidate.likes} | 💬 ${bestCandidate.comments}`);
+    }
     return null;
   }
 
   const targetLikes = settings.minLikes;
   const targetComments = settings.minComments;
 
-  // Calculate distance from target engagement
-  const scoredPosts = postsToConsider.map(post => {
-    // Distance calculation: how far from our ideal target
-    const diffLikes = Math.abs(post.likes - targetLikes);
-    const diffComments = Math.abs(post.comments - targetComments);
+  // Calculate strict distance from the absolute minimums.
+  // Formula: (likes - minLikes) + (comments - minComments) safely prioritizing closest above minimum threshold
+  const scoredPosts = filteredPosts.map(post => {
+    // Both of these are guaranteed > 0 due to filteredPosts check
+    const diffLikes = post.likes - targetLikes;
+    const diffComments = post.comments - targetComments;
     const distanceScore = diffLikes + diffComments;
     return { ...post, distance: distanceScore };
   });
 
-  // Sort by lowest distance score (closest to our target)
+  // Sort by lowest distance score (closest to our baseline)
   scoredPosts.sort((a, b) => a.distance - b.distance);
 
-  const bestPost = scoredPosts[0];
+  // The very top result is the post right above our threshold that matched Min/Max rules.
+  const bestTargetPost = scoredPosts[0];
 
-  console.log(`   ✅ Selected post (${selectionMode}):`);
-  console.log(`      👍 ${bestPost.likes} likes | 💬 ${bestPost.comments} comments`);
-  console.log(`      📏 Distance from target: ${bestPost.distance}`);
-  console.log(`      🔗 URL: ${bestPost.url}`);
-  
-  return bestPost;
+  console.log(`   ✅ Selected post closest to target limits. Distance from combined minimum: +${bestTargetPost.distance}`);
+  return bestTargetPost;
 }
 
 // ============================================================================
