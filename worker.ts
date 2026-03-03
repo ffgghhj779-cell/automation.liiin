@@ -724,6 +724,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           var href = link.getAttribute('href') || '';
           if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
           href = href.split('?')[0].split('#')[0]; // Remove query params and anchors
+          href = href.replace(/\/$/, ''); // Remove trailing slash
           
           // STRICT VALIDATION: Only accept real post URLs in Phase 1 too
           if (!isValidPostUrl(href)) {
@@ -856,12 +857,30 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       })()
     `;
 
-    const rawPosts = await page.evaluate(superScraper).catch((err: any) => {
-      console.log(`   ❌ Scraper script error: ${err.message}`);
-      return [] as any[];
-    }) as any[];
+    // SAFE EXECUTION: Wrap in try/catch with guaranteed return structure
+    let rawPosts: any[] = [];
+    let diag: any = {
+      containerCount: 0,
+      totalExtracted: 0,
+      phase1Details: { containersFound: 0, containersWithLinks: 0, linksAccepted: 0, linksRejectedByValidation: 0, linksDuplicate: 0 },
+      phase2Details: { linksFound: 0, linksAccepted: 0, linksRejectedByValidation: 0, linksDuplicate: 0 },
+      sampleRejectedUrls: [],
+      methods: {},
+      noResultsFound: false
+    };
 
-    const diag: any = await page.evaluate('window.__scraperDiagnostics').catch(() => ({}));
+    try {
+      rawPosts = await page.evaluate(superScraper) || [];
+    } catch (err: any) {
+      console.log(`   ❌ Scraper script error: ${err.message}`);
+      rawPosts = [];
+    }
+
+    try {
+      diag = await page.evaluate('window.__scraperDiagnostics') || diag;
+    } catch (err: any) {
+      console.log(`   ⚠️  Diagnostics not available: ${err.message}`);
+    }
 
     console.log(`\n📊 Scraper Metrics:`);
     console.log(`   Containers detected: ${diag.containerCount || 0}`);
