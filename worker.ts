@@ -302,64 +302,130 @@ async function processKeyword(
 
     const filteredPosts = filterPostsByReach(posts, settings);
 
-    // Step 3: Select best post (closest to minimum reach)
-    const selectedPost = selectBestPost(filteredPosts, posts, settings);
+    // Filter out invalid posts (0 engagement)
+    const validPosts = posts.filter(p => p.likes > 0 || p.comments > 0);
+    const validFilteredPosts = filteredPosts.filter(p => p.likes > 0 || p.comments > 0);
 
-    if (!selectedPost) {
-      console.log(`⚠️  No suitable post found after filtering. Skipping.`);
-      await broadcastLog(`No posts matched reach criteria for "${keyword}"`, 'warn');
+    // Determine which posts to use
+    let postsToCommentOn: PostCandidate[] = [];
+    if (validFilteredPosts.length > 0) {
+      postsToCommentOn = validFilteredPosts;
+      console.log(`   ✅ Found ${validFilteredPosts.length} posts matching criteria`);
+    } else if (validPosts.length > 0) {
+      postsToCommentOn = validPosts;
+      console.log(`   ⚠️  No posts matched strict criteria. Using ${validPosts.length} available posts.`);
+    } else {
+      console.log(`   ❌ No valid posts found (all had 0 engagement).`);
+      await broadcastLog(`No valid posts found for "${keyword}"`, 'warn');
       return {
         success: false,
         keyword,
-        reason: 'No posts matched the reach criteria'
+        reason: 'No valid posts found (all had 0 engagement)'
       };
     }
 
-    console.log(`\n✅ Selected Post:`);
-    console.log(`   URL: ${selectedPost.url}`);
-    console.log(`   Likes: ${selectedPost.likes} | Comments: ${selectedPost.comments}`);
-    console.log(`   Distance from minimum: ${selectedPost.distance.toFixed(2)}`);
+    // Sort posts by distance from target (closest first)
+    const targetLikes = settings.minLikes;
+    const targetComments = settings.minComments;
+    postsToCommentOn = postsToCommentOn.map(post => ({
+      ...post,
+      distance: Math.abs(post.likes - targetLikes) + Math.abs(post.comments - targetComments)
+    })).sort((a, b) => a.distance - b.distance);
 
-    // Step 4: Select random comment from keyword's comments
-    const randomComment = comments[Math.floor(Math.random() * comments.length)];
-    console.log(`\n💬 Selected Comment: "${randomComment.text.substring(0, 50)}..."`);
-
-    // Step 5: Post comment and verify
-    await broadcastLog(`Posting comment on selected post...`);
-    const commentResult = await postAndVerifyComment(selectedPost.url, randomComment.text);
-
-    if (!commentResult.success) {
-      console.log(`❌ Failed to post comment: ${commentResult.reason}`);
-      return {
-        success: false,
-        keyword,
-        commentText: randomComment.text,
-        postUrl: selectedPost.url,
-        reason: commentResult.reason
-      };
-    }
-
-    console.log(`\n✅ SUCCESS! Comment posted and verified`);
-    console.log(`   Post URL: ${selectedPost.url}`);
-    console.log(`   Comment URL: ${commentResult.commentUrl}`);
-
-    // Update comment usage count
-    await prisma.comment.update({
-      where: { id: randomComment.id },
-      data: { timesUsed: { increment: 1 } }
+    console.log(`\n📝 Will post comments on ${postsToCommentOn.length} posts:\n`);
+    postsToCommentOn.forEach((post, i) => {
+      console.log(`   [${i + 1}] 👍 ${post.likes} | 💬 ${post.comments} | Distance: ${post.distance}`);
     });
 
-    return {
-      success: true,
-      keyword,
-      commentText: randomComment.text,
-      postUrl: selectedPost.url,
-      commentUrl: commentResult.commentUrl,
-      selectedPost: {
-        likes: selectedPost.likes,
-        comments: selectedPost.comments
+    // Step 3: Post comment on EACH found post
+    let successCount = 0;
+    let failCount = 0;
+    const results: Array<{ success: boolean; postUrl: string; reason?: string; commentUrl?: string }> = [];
+
+    for (let i = 0; i < postsToCommentOn.length; i++) {
+      const post = postsToCommentOn[i];
+      
+      console.log(`\n${'─'.repeat(60)}`);
+      console.log(`📍 Post ${i + 1} of ${postsToCommentOn.length}`);
+      console.log(`${'─'.repeat(60)}`);
+
+      // Select random comment from keyword's comments
+      const randomComment = comments[Math.floor(Math.random() * comments.length)];
+      console.log(`💬 Selected Comment: "${randomComment.text.substring(0, 50)}..."`);
+
+      // Post comment and verify
+      await broadcastLog(`Posting comment on post ${i + 1}/${postsToCommentOn.length}...`);
+      const commentResult = await postAndVerifyComment(post.url, randomComment.text);
+
+      if (commentResult.success) {
+        successCount++;
+        console.log(`   ✅ SUCCESS! Comment posted and verified`);
+        
+        // Update comment usage count
+        await prisma.comment.update({
+          where: { id: randomComment.id },
+          data: { timesUsed: { increment: 1 } }
+        });
+
+        results.push({
+          success: true,
+          postUrl: post.url,
+          commentUrl: commentResult.commentUrl
+        });
+
+        // Broadcast individual success
+        await broadcastAction('COMMENT_POSTED', {
+          keyword,
+          postUrl: post.url,
+          commentUrl: commentResult.commentUrl,
+          commentText: randomComment.text,
+          selectedPost: { likes: post.likes, comments: post.comments }
+        });
+      } else {
+        failCount++;
+        console.log(`   ❌ FAILED: ${commentResult.reason}`);
+        results.push({
+          success: false,
+          postUrl: post.url,
+          reason: commentResult.reason
+        });
       }
-    };
+
+      // Wait 3 seconds between posts to avoid rate limiting
+      if (i < postsToCommentOn.length - 1) {
+        console.log(`   ⏳ Waiting 3 seconds before next post...`);
+        await sleep(3000);
+      }
+    }
+
+    // Summary
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`📊 SUMMARY for keyword "${keyword}":`);
+    console.log(`   ✅ Successful: ${successCount}/${postsToCommentOn.length}`);
+    console.log(`   ❌ Failed: ${failCount}/${postsToCommentOn.length}`);
+    console.log(`${'='.repeat(60)}\n`);
+
+    // Return overall success if at least one comment was posted
+    if (successCount > 0) {
+      const firstSuccess = results.find(r => r.success);
+      return {
+        success: true,
+        keyword,
+        commentText: `Posted on ${successCount} posts`,
+        postUrl: firstSuccess!.postUrl,
+        commentUrl: firstSuccess!.commentUrl,
+        selectedPost: {
+          likes: postsToCommentOn[0].likes,
+          comments: postsToCommentOn[0].comments
+        }
+      };
+    } else {
+      return {
+        success: false,
+        keyword,
+        reason: `Failed to post on all ${postsToCommentOn.length} posts`
+      };
+    }
 
   } catch (error: any) {
     console.error(`❌ Error processing keyword "${keyword}":`, error);
@@ -733,6 +799,47 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
 
     await broadcastScreenshot(page, 'Navigated to post');
 
+    // CRITICAL: Check for CAPTCHA before attempting to post
+    console.log(`   🔍 Checking for CAPTCHA...`);
+    const hasCaptcha = await page.evaluate(() => {
+      return document.body.innerText.includes('CAPTCHA') || 
+             document.body.innerText.includes('security verification') ||
+             !!document.querySelector('iframe[src*="captcha"]');
+    }).catch(() => false);
+    
+    if (hasCaptcha) {
+      console.log(`   🚨 CAPTCHA detected on post page!`);
+      await broadcastScreenshot(page, 'CAPTCHA detected on post page');
+      throw new Error('CAPTCHA_DETECTED');
+    }
+    console.log(`   ✅ No CAPTCHA detected`);
+
+    // CRITICAL: Verify this is actually a post page
+    console.log(`   🔍 Verifying this is a valid post page...`);
+    const isValidPost = await page.evaluate(() => {
+      // Check for post indicators
+      const postSelectors = [
+        '.feed-shared-update-v2',
+        '[data-urn*="activity"]',
+        '[data-urn*="ugcPost"]',
+        'article.feed-shared-update',
+        '[data-id*="urn:li:activity"]'
+      ];
+      
+      for (const selector of postSelectors) {
+        if (document.querySelector(selector)) return true;
+      }
+      
+      return false;
+    }).catch(() => false);
+    
+    if (!isValidPost) {
+      console.log(`   ❌ Not a valid post page - missing post indicators`);
+      await broadcastScreenshot(page, 'Not a valid post page');
+      return { success: false, reason: 'Not a valid LinkedIn post page' };
+    }
+    console.log(`   ✅ Confirmed valid post page`);
+
     // Try multiple comment button selectors
     const commentButtonSelectors = [
       'button[aria-label*="Comment"]',
@@ -846,12 +953,25 @@ async function postAndVerifyComment(postUrl: string, commentText: string): Promi
 
     await broadcastScreenshot(page, 'Comment submitted - waiting for verification');
 
-    // Verify comment appears in DOM
-    const verificationResult = await verifyCommentInDOM(commentText);
+    // Verify comment appears in DOM (first attempt)
+    console.log(`   🔍 Verifying comment in DOM (Attempt 1)...`);
+    let verificationResult = await verifyCommentInDOM(commentText);
 
+    // If not found, try reloading the page and verify again
     if (!verificationResult.found) {
-      await broadcastScreenshot(page, 'Comment verification FAILED');
-      return { success: false, reason: 'Comment not found in DOM after submission - may have been blocked or failed' };
+      console.log(`   ⚠️  Comment not found on first attempt. Reloading page...`);
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(3000);
+      await broadcastScreenshot(page, 'Page reloaded - verifying again');
+      
+      console.log(`   🔍 Verifying comment in DOM (Attempt 2 after reload)...`);
+      verificationResult = await verifyCommentInDOM(commentText);
+      
+      if (!verificationResult.found) {
+        console.log(`   ❌ Comment still not found after reload`);
+        await broadcastScreenshot(page, 'Comment verification FAILED after reload');
+        return { success: false, reason: 'Comment not found in DOM after submission and reload - may have been blocked or failed' };
+      }
     }
 
     console.log(`   ✅ Comment verified in DOM!`);
