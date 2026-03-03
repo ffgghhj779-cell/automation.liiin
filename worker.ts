@@ -686,7 +686,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     // Navigate to LinkedIn to verify session
     console.log('   Navigating to LinkedIn feed...');
     await page.goto('https://www.linkedin.com/feed', {
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
       timeout: 60000
     });
     await sleep(5000); // Wait for page to fully load
