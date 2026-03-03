@@ -534,10 +534,10 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       })()
     `;
 
-    const rawPosts: any[] = await page.evaluate(superScraper).catch((err: any) => {
+    const rawPosts = await page.evaluate(superScraper).catch((err: any) => {
       console.log(`   ❌ Scraper script error: ${err.message}`);
       return [] as any[];
-    });
+    }) as any[];
 
     const diag: any = await page.evaluate('window.__scraperDiagnostics').catch(() => ({}));
 
@@ -751,7 +751,7 @@ async function verifyCommentInDOM(commentText: string): Promise<{ found: boolean
           const recentComments = commentElements.slice(-10);
           
           for (const commentElement of recentComments) {
-            const text = await commentElement.textContent().catch(() => '');
+            const text = await commentElement.textContent().catch(() => '') || '';
             const textLower = text.toLowerCase().trim();
             
             // Match using snippet OR full text
