@@ -534,9 +534,9 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       })()
     `;
 
-    const rawPosts: any[] = await page.evaluate(superScraper).catch(err => {
+    const rawPosts: any[] = await page.evaluate(superScraper).catch((err: any) => {
       console.log(`   ❌ Scraper script error: ${err.message}`);
-      return [];
+      return [] as any[];
     });
 
     const diag: any = await page.evaluate('window.__scraperDiagnostics').catch(() => ({}));
