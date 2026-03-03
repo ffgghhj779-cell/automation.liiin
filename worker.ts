@@ -517,25 +517,16 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
           sampleRejectedUrls: []
         };
         
-        // Strict URL validation - only accept real LinkedIn post URLs
+        // RELAXED URL validation - accept LinkedIn post URLs
         function isValidPostUrl(url) {
-          // Must contain one of these patterns for a real post
-          var validPatterns = [
-            /\/posts\/[a-zA-Z0-9_-]+/,           // /posts/abc123
-            /\/feed\/update\/urn:li:activity:/,   // /feed/update/urn:li:activity:...
-            /\/feed\/update\/urn:li:ugcPost:/,    // /feed/update/urn:li:ugcPost:...
-            /activity-\d{19}/,                     // activity-1234567890123456789
-            /ugcPost-\d{19}/                       // ugcPost-1234567890123456789
-          ];
-          
-          // Must NOT be any of these (non-post pages)
+          // Must NOT be any of these (non-post pages) - PRIORITY CHECK
           var invalidPatterns = [
             /\/premium\/products/,
             /\/premium\/?$/,
             /\/company\/[^\/]+\/?$/,              // Company root page (no /posts/)
             /\/company\/[^\/]+\/posts\/?$/,       // Company posts listing (not individual post)
             /\/feed\/?$/,                          // Feed home page
-            /\/search\//,                          // Search results
+            /\/search\//,                          // Search results page
             /\/mynetwork\//,                       // Network pages
             /\/messaging\//,                       // Messaging
             /\/notifications\//,                   // Notifications
@@ -543,16 +534,37 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
             /\/learning\//                         // Learning
           ];
           
-          // Check invalid patterns first
+          // Check invalid patterns first - reject these immediately
           for (var i = 0; i < invalidPatterns.length; i++) {
-            if (invalidPatterns[i].test(url)) return false;
+            if (invalidPatterns[i].test(url)) {
+              console.log('[Validation] REJECTED (invalid pattern): ' + url.substring(0, 100));
+              return false;
+            }
           }
           
-          // Check valid patterns
-          for (var i = 0; i < validPatterns.length; i++) {
-            if (validPatterns[i].test(url)) return true;
+          // RELAXED: Accept if URL contains ANY post indicator
+          // LinkedIn post URLs can have various formats
+          var postIndicators = [
+            '/posts/',           // /posts/john-doe_something-123
+            '/feed/update/',     // /feed/update/urn:li:activity:123 OR /feed/update/urn:li:ugcPost:123
+            'activity-',         // activity-7234567890123456789
+            'ugcPost-',          // ugcPost-7234567890123456789
+            ':activity:',        // urn:li:activity:123
+            ':ugcPost:',         // urn:li:ugcPost:123
+            '/pulse/',           // LinkedIn articles
+            'linkedin.com/in/', // User post from profile
+            'linkedin.com/company/.*?/posts/.+' // Company individual post (NOT just /posts/)
+          ];
+          
+          // Accept if contains ANY post indicator
+          for (var i = 0; i < postIndicators.length; i++) {
+            if (url.indexOf(postIndicators[i]) !== -1 || new RegExp(postIndicators[i]).test(url)) {
+              console.log('[Validation] ACCEPTED (post indicator): ' + url.substring(0, 100));
+              return true;
+            }
           }
           
+          console.log('[Validation] REJECTED (no post indicator): ' + url.substring(0, 100));
           return false;
         }
         
