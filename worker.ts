@@ -23,8 +23,8 @@
 
 import { chromium, Browser, Page } from 'playwright';
 import { PrismaClient } from '@prisma/client';
-import { 
-  setUserContext, 
+import {
+  setUserContext,
   setApiBaseUrl,
   broadcastStatus,
   broadcastAction,
@@ -115,8 +115,8 @@ async function main() {
         }
 
         // Check if user or session changed - recreate browser context if needed
-        const sessionChanged = currentUserId !== settings.userId || 
-                              currentSessionCookie !== settings.linkedinSessionCookie;
+        const sessionChanged = currentUserId !== settings.userId ||
+          currentSessionCookie !== settings.linkedinSessionCookie;
 
         if (sessionChanged && currentUserId !== null) {
           console.log('🔄 User or session changed. Recreating browser context...');
@@ -147,7 +147,7 @@ async function main() {
         if (keywords.length === 0) {
           console.log('⏸️  No active keywords found. Waiting...');
           await broadcastLog('No active keywords found. Add keywords to start automation.');
-          await sleep(30000); // Wait 30 seconds
+          await sleep(5000); // Wait 5 seconds
           continue;
         }
 
@@ -188,12 +188,12 @@ async function main() {
         }
 
         console.log('\n✅ Cycle complete. Starting next cycle...\n');
-        await sleep(5000); // 5 seconds between cycles
+        await sleep(2000); // Max 2 seconds between cycles
 
       } catch (error: any) {
         console.error('❌ Error in worker loop:', error);
         await broadcastError(`Worker error: ${error.message}`);
-        await sleep(30000); // Wait 30 seconds on error
+        await sleep(5000); // Wait 5 seconds on error
       }
     }
 
@@ -236,7 +236,7 @@ async function processKeyword(
     // Step 1: Search LinkedIn for keyword
     console.log(`🔍 Searching LinkedIn for: "${keyword}"`);
     await broadcastLog(`Searching LinkedIn for keyword: "${keyword}"`);
-    
+
     const posts = await searchLinkedInPosts(keyword);
 
     if (posts.length === 0) {
@@ -340,7 +340,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
     // Navigate to LinkedIn search
     const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
     console.log(`   Navigating to: ${searchUrl}`);
-    
+
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await sleep(3000); // Wait for dynamic content
 
@@ -364,7 +364,7 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
 
         // Extract engagement metrics
         const socialCountsElement = await postElement.$('ul.social-details-social-counts');
-        
+
         let likes = 0;
         let comments = 0;
 
@@ -483,21 +483,24 @@ async function verifyCommentInDOM(commentText: string): Promise<{ found: boolean
   if (!page) return { found: false };
 
   try {
-    // Wait a bit for DOM to update
-    await sleep(2000);
+    const startTime = Date.now();
+    const maxWaitTime = 15000; // Wait up to 15 seconds for comment to appear dynamically
 
-    // Look for comment text in the comments section
-    const commentElements = await page.$$('div.comments-comment-item');
+    while (Date.now() - startTime < maxWaitTime) {
+      // Small interval between polls
+      await sleep(1000);
 
-    for (const commentElement of commentElements) {
-      const text = await commentElement.textContent();
-      if (text && text.includes(commentText)) {
-        return { found: true };
+      const commentElements = await page.$$('div.comments-comment-item');
+
+      for (const commentElement of commentElements) {
+        const text = await commentElement.textContent();
+        if (text && text.includes(commentText)) {
+          return { found: true };
+        }
       }
     }
 
     return { found: false };
-
   } catch (error) {
     return { found: false };
   }
@@ -546,44 +549,34 @@ function selectBestPost(
   allPosts: PostCandidate[],
   settings: WorkerSettings
 ): PostCandidate | null {
-  // If we have exact matches, pick randomly
-  if (filteredPosts.length > 0) {
-    console.log(`   ✅ Found ${filteredPosts.length} posts matching exact reach criteria`);
-    const randomPost = filteredPosts[Math.floor(Math.random() * filteredPosts.length)];
-    randomPost.distance = 0;
-    return randomPost;
+  // We strictly need to pick from filtered posts as they are already within Min and Max.
+  // If no filtered posts exist, return null.
+  if (filteredPosts.length === 0) {
+    console.log(`   ⚠️  No posts matched reach criteria. Skipping.`);
+    return null;
   }
-
-  // No exact matches - find closest to minimum reach
-  console.log(`   ⚠️  No exact matches. Finding closest to minimum reach...`);
 
   const targetLikes = settings.minLikes;
   const targetComments = settings.minComments;
 
-  // Calculate distance from minimum reach for all posts
-  const postsWithDistance = allPosts.map(post => {
-    const likesDistance = Math.abs(post.likes - targetLikes);
-    const commentsDistance = Math.abs(post.comments - targetComments);
-    
-    // Euclidean distance
-    const distance = Math.sqrt(likesDistance ** 2 + commentsDistance ** 2);
-
-    return { ...post, distance };
+  // Calculate strict distance from the absolute minimums.
+  // Formula: (likes - minLikes) + (comments - minComments) safely prioritizing closest above minimum threshold
+  const scoredPosts = filteredPosts.map(post => {
+    // Both of these are guaranteed > 0 due to filteredPosts check
+    const diffLikes = post.likes - targetLikes;
+    const diffComments = post.comments - targetComments;
+    const distanceScore = diffLikes + diffComments;
+    return { ...post, distance: distanceScore };
   });
 
-  // Sort by distance (closest first)
-  postsWithDistance.sort((a, b) => a.distance - b.distance);
+  // Sort by lowest distance score (closest to our baseline)
+  scoredPosts.sort((a, b) => a.distance - b.distance);
 
-  // Prefer posts slightly above minimum over posts below minimum
-  const closestPost = postsWithDistance.find(post => 
-    post.likes >= targetLikes && post.comments >= targetComments
-  ) || postsWithDistance[0];
+  // The very top result is the post right above our threshold that matched Min/Max rules.
+  const bestTargetPost = scoredPosts[0];
 
-  if (closestPost) {
-    console.log(`   ✅ Selected closest post (distance: ${closestPost.distance.toFixed(2)})`);
-  }
-
-  return closestPost || null;
+  console.log(`   ✅ Selected post closest to target limits. Distance from combined minimum: +${bestTargetPost.distance}`);
+  return bestTargetPost;
 }
 
 // ============================================================================
@@ -592,7 +585,7 @@ function selectBestPost(
 
 async function initializeBrowser() {
   console.log('🌐 Initializing browser (headed mode)...');
-  
+
   browser = await chromium.launch({
     headless: false, // VISIBLE BROWSER
     args: [
@@ -650,8 +643,8 @@ async function recreateBrowserContext() {
   // Close old page and context
   if (page) {
     const oldContext = page.context();
-    await page.close().catch(() => {});
-    await oldContext.close().catch(() => {});
+    await page.close().catch(() => { });
+    await oldContext.close().catch(() => { });
     page = null;
   }
 
@@ -692,16 +685,16 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     // Navigate to LinkedIn to verify session
     console.log('   Navigating to LinkedIn feed...');
-    await page.goto('https://www.linkedin.com/feed', { 
-      waitUntil: 'networkidle', 
-      timeout: 60000 
+    await page.goto('https://www.linkedin.com/feed', {
+      waitUntil: 'networkidle',
+      timeout: 60000
     });
     await sleep(5000); // Wait for page to fully load
 
     // Check if logged in (look for feed or profile element)
     const isLoggedIn = await page.$('div.feed-shared-update-v2') !== null ||
-                       await page.$('button[aria-label*="Start a post"]') !== null ||
-                       await page.$('button.share-box-feed-entry__trigger') !== null;
+      await page.$('button[aria-label*="Start a post"]') !== null ||
+      await page.$('button.share-box-feed-entry__trigger') !== null;
 
     if (isLoggedIn) {
       console.log('✅ LinkedIn authentication successful\n');
@@ -709,48 +702,48 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       return true;
     } else {
       console.log('❌ LinkedIn authentication failed (not logged in)\n');
-      
+
       // Take screenshot for debugging
       await broadcastScreenshot(page, 'Authentication failed');
-      
+
       // Check if we're on login page
       const onLoginPage = await page.$('input[name="session_key"]') !== null;
       if (onLoginPage) {
         console.log('   Reason: Redirected to login page (invalid cookie)');
       }
-      
+
       return false;
     }
 
   } catch (error: any) {
     console.error('❌ Authentication error:', error.message);
-    
+
     // Provide helpful error messages
     if (error.message.includes('ERR_TOO_MANY_REDIRECTS')) {
       console.log('   Reason: Too many redirects (likely invalid/expired cookie)');
     } else if (error.message.includes('Timeout')) {
       console.log('   Reason: LinkedIn took too long to respond');
     }
-    
+
     return false;
   }
 }
 
 async function cleanup() {
   console.log('\n🧹 Cleaning up...');
-  
+
   if (page) {
-    await page.close().catch(() => {});
+    await page.close().catch(() => { });
     page = null;
   }
 
   if (browser) {
-    await browser.close().catch(() => {});
+    await browser.close().catch(() => { });
     browser = null;
   }
 
   await prisma.$disconnect();
-  
+
   console.log('✅ Cleanup complete\n');
 }
 
