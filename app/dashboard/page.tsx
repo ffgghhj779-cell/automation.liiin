@@ -15,6 +15,7 @@ import Header from '@/components/dashboard/Header';
 import StatCard from '@/components/dashboard/StatCard';
 import ActivityFeed from '@/components/dashboard/ActivityFeed';
 import Chart from '@/components/dashboard/Chart';
+import { SavedPostsPanel } from '@/components/dashboard/SavedPostsPanel';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Input, { TextArea } from '@/components/ui/Input';
@@ -206,7 +207,8 @@ export default function Dashboard() {
       maxComments: Number(formData.get('maxComments')),
       minDelayMins: Number(formData.get('minDelayMins')),
       maxDelayMins: Number(formData.get('maxDelayMins')),
-      linkedinSessionCookie: formData.get('linkedinSessionCookie') as string
+      linkedinSessionCookie: formData.get('linkedinSessionCookie') as string,
+      searchOnlyMode: formData.get('searchOnlyMode') === 'on'
     };
     await fetch('/api/settings', {
       method: 'POST',
@@ -219,6 +221,9 @@ export default function Dashboard() {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'saved-posts':
+        return <SavedPostsPanel />;
+      
       case 'dashboard':
         // Mock chart data
         const chartData = [
@@ -767,6 +772,32 @@ export default function Dashboard() {
                 </p>
               </div>
               <form onSubmit={saveSettings} className="p-6 md:p-8 space-y-8">
+
+                {/* Search-Only Mode Toggle */}
+                <div className="bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl p-6 shadow-xl">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h4 className="text-sm font-extrabold text-white mb-2 flex items-center gap-2">
+                        <Search size={16} className="text-white" />
+                        Search-Only Mode (Recommended)
+                      </h4>
+                      <p className="text-xs text-blue-100 mb-3">
+                        Enable this mode to search and save posts WITHOUT auto-commenting. Safer and avoids CAPTCHA triggers.
+                      </p>
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          name="searchOnlyMode"
+                          defaultChecked={settings.searchOnlyMode ?? true}
+                          className="w-5 h-5 rounded border-2 border-white/30 bg-white/10 text-primary-600 focus:ring-2 focus:ring-white/50"
+                        />
+                        <span className="text-sm font-semibold text-white">
+                          Enable Search-Only Mode
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
 
                 {/* LinkedIn Cookie Section */}
                 <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">

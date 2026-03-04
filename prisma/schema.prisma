@@ -8,16 +8,17 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
+  id         String      @id @default(uuid())
+  email      String      @unique
+  password   String
+  createdAt  DateTime    @default(now())
   
-  settings  Settings?
-  keywords  Keyword[]
-  comments  Comment[]
-  logs      Log[]
-  autoPosts AutoPost[]
+  settings   Settings?
+  keywords   Keyword[]
+  comments   Comment[]
+  logs       Log[]
+  autoPosts  AutoPost[]
+  savedPosts SavedPost[]
 }
 
 model Settings {
@@ -39,6 +40,7 @@ model Settings {
   systemActive          Boolean @default(false)
   linkedinSessionCookie String  @default("")
   platformUrl           String  @default("")
+  searchOnlyMode        Boolean @default(true)
   
   userId                String  @unique
   user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -92,6 +94,24 @@ model AutoPost {
   
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SavedPost {
+  id          String   @id @default(uuid())
+  postUrl     String
+  postAuthor  String?
+  postPreview String?
+  likes       Int      @default(0)
+  comments    Int      @default(0)
+  keyword     String
+  savedAt     DateTime @default(now())
+  visited     Boolean  @default(false)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, savedAt])
+  @@index([userId, keyword])
 }
 
 

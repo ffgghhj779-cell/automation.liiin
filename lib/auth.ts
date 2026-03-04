@@ -18,6 +18,15 @@ export async function getUserFromToken() {
     }
 }
 
+export function verifyToken(token: string) {
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+        return decoded;
+    } catch (err) {
+        return null;
+    }
+}
+
 export function unauthorized() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 }
