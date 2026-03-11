@@ -342,52 +342,71 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
     console.log(`📊 Found ${posts.length} posts\n`);
 
     // Filter by reach criteria (strict matches)
-    const strictMatches = posts.filter(post => 
+    const strictMatches = posts.filter(post =>
       post.likes >= settings.minLikes &&
       post.likes <= settings.maxLikes &&
       post.comments >= settings.minComments &&
       post.comments <= settings.maxComments
     );
 
+    // Double-check: how many posts actually have engagement data?
+    const withEngagement = posts.filter(p => p.likes > 0 || p.comments > 0);
+    console.log(`📈 Engagement data: ${withEngagement.length}/${posts.length} posts have likes/comments`);
     console.log(`✅ ${strictMatches.length} posts match reach criteria\n`);
-    await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}"`);
+    await broadcastLog(`Found ${strictMatches.length} matching posts for "${keyword.keyword}" (${withEngagement.length} with engagement data)`);
 
     let postsToSave: PostCandidate[] = strictMatches;
     let usedFallback = false;
 
-    // If no strict matches, fall back to closest posts by reach
+    // Only use fallback if there are genuinely no strict matches.
+    // If most posts have zero engagement it likely means LinkedIn didn't render
+    // engagement counts — still prefer strict matches (empty set) over
+    // saving random posts, but log a warning so the user knows.
     if (postsToSave.length === 0) {
-      console.log('⚠️  No posts match your reach criteria exactly. Using closest posts by reach instead.\n');
-      postsToSave = getClosestByReach(posts, settings, 10); // up to 10 closest posts
-      usedFallback = postsToSave.length > 0;
-      if (usedFallback) {
+      if (withEngagement.length === 0) {
+        console.log('⚠️  All posts have zero engagement — LinkedIn may not have rendered counts.\n');
         await broadcastLog(
-          `No strict matches for "${keyword.keyword}". Using ${postsToSave.length} closest posts by reach instead.`,
+          `All ${posts.length} posts for "${keyword.keyword}" returned zero engagement. LinkedIn may not have loaded counts. Skipping fallback.`,
           'warn'
         );
+        // Save top posts anyway so the user has URLs to inspect manually
+        postsToSave = posts.slice(0, 20);
+        usedFallback = true;
       } else {
-        await broadcastLog(
-          `No posts with meaningful engagement for "${keyword.keyword}" (all zero likes/comments).`,
-          'warn'
-        );
+        // Real engagement data exists — use closest-by-reach fallback
+        console.log('⚠️  No strict matches. Double-checked: engagement data exists. Using closest-by-reach fallback.\n');
+        postsToSave = getClosestByReach(posts, settings);
+        usedFallback = postsToSave.length > 0;
+        if (usedFallback) {
+          await broadcastLog(
+            `No strict reach matches for "${keyword.keyword}". Using ${postsToSave.length} closest-by-reach posts instead.`,
+            'warn'
+          );
+        } else {
+          await broadcastLog(
+            `No posts with meaningful engagement for "${keyword.keyword}" (all zero likes/comments).`,
+            'warn'
+          );
+        }
       }
     }
 
     if (postsToSave.length === 0) {
-      console.log('⚠️  No posts with meaningful engagement to save\n');
+      console.log('⚠️  No posts to save\n');
       return;
     }
 
-    // Save all selected posts to database
-    let savedCount = 0;
-    for (const post of postsToSave) {
-      const saved = await savePostToDatabase(post, keyword.keyword, settings.userId);
-      if (saved) savedCount++;
-    }
+    // Save all selected posts in parallel for speed
+    const saveResults = await Promise.allSettled(
+      postsToSave.map(post => savePostToDatabase(post, keyword.keyword, settings.userId))
+    );
+    const savedCount = saveResults.filter(
+      r => r.status === 'fulfilled' && r.value === true
+    ).length;
 
     console.log(`💾 Saved ${savedCount} new posts to dashboard\n`);
     await broadcastLog(
-      `${usedFallback ? '✅ Saved closest-by-reach posts' : '✅ Saved strict matches'} for "${keyword.keyword}" (${savedCount} saved)`
+      `${usedFallback ? '✅ Saved fallback posts' : '✅ Saved strict matches'} for "${keyword.keyword}" (${savedCount}/${postsToSave.length} saved)`
     );
 
   } catch (error: any) {
@@ -397,41 +416,65 @@ async function processKeyword(keyword: KeywordData, settings: WorkerSettings) {
 }
 
 // ============================================================================
-// LINKEDIN SEARCH
-// ============================================================================
+// LINKEDIN SEA// Maximum number of posts to collect per keyword search
+const MAX_POSTS_PER_SEARCH = 60;
 
 async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
   if (!page) throw new Error('Browser not initialized');
 
   try {
     const searchUrl = `https://www.linkedin.com/search/results/content/?keywords=${encodeURIComponent(keyword)}&sortBy=date_posted`;
-    
+
     console.log(`🔍 Navigating to search page...`);
-    
-    // Human-like navigation with random delay
-    await humanDelay(2000, 4000);
-    
+
     await page.goto(searchUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     });
 
-    // Wait briefly and ensure at least some result container exists (don’t hang)
-    await humanDelay(2000, 4000);
-    await page.waitForSelector('.reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"], [data-chameleon-result-urn]', { timeout: 15000 })
-      .catch(() => console.log('⚠️  Result containers not found quickly; attempting extraction anyway...'));
+    // Wait for first batch of results (exit early if they load fast)
+    await page.waitForSelector(
+      '.reusable-search__result-container, [data-urn*="activity"], [data-urn*="ugcPost"], [data-chameleon-result-urn]',
+      { timeout: 12000 }
+    ).catch(() => console.log('⚠️  Initial result containers slow — proceeding anyway...'));
 
-    // Scroll a few times to trigger lazy-loading (conservative)
-    for (let i = 0; i < 3; i++) {
-      await humanScroll(page);
-      await humanDelay(1200, 2400);
-      // Click “See more results” if present
-      const moreBtn = await page.$('button.search-results-bottom-pagination__button, button[aria-label="See more results"]').catch(() => null);
+    // ── Scroll loop: 7 rounds to load as many posts as possible ──────────────
+    // After each scroll we wait for NEW content rather than a fixed delay,
+    // so fast-loading pages don't waste time.
+    console.log('📜 Scrolling to load more posts...');
+    for (let round = 0; round < 7; round++) {
+      // Scroll to bottom of the last visible result card (triggers infinite scroll)
+      await page.evaluate(() => {
+        const cards = document.querySelectorAll(
+          '.reusable-search__result-container, li.artdeco-card, [data-chameleon-result-urn]'
+        );
+        const last = cards[cards.length - 1];
+        if (last) {
+          last.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        } else {
+          window.scrollBy(0, 900);
+        }
+      });
+
+      // Wait up to 3 s for new cards, then continue regardless
+      await Promise.race([
+        page.waitForSelector('[data-chameleon-result-urn], .reusable-search__result-container', {
+          timeout: 3000
+        }).catch(() => {}),
+        sleep(1000)
+      ]);
+      await humanDelay(800, 1500);  // shorter than before but still human-like
+
+      // Click "See more results" if visible
+      const moreBtn = await page.$(
+        'button.search-results-bottom-pagination__button, button[aria-label="See more results"]'
+      ).catch(() => null);
       if (moreBtn) {
         await moreBtn.click().catch(() => {});
-        await humanDelay(2000, 3500);
+        await humanDelay(1500, 2500);
       }
     }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Check for CAPTCHA / anti-bot signals
     const detection = await detectCaptcha();
@@ -440,25 +483,28 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       await broadcastError(`Hard CAPTCHA detected during search: ${detection.reason}`);
       throw new Error('HARD_CAPTCHA_DETECTED_DURING_SEARCH');
     } else if (detection.level === 'soft') {
-      console.log('⚠️ Soft anti-bot signal detected during search:', detection.reason);
-      await broadcastLog('Soft anti-bot signal detected during search. Backing off but continuing.', 'warn');
-      // Extra conservative backoff on soft signals
+      console.log('⚠️ Soft anti-bot signal during search:', detection.reason);
+      await broadcastLog('Soft anti-bot signal during search. Backing off but continuing.', 'warn');
       await humanDelay(60000, 120000);
     }
 
-    // Extract post data (multi-strategy, resilient)
     console.log(`📊 Extracting post data...`);
 
-    const superScraper = String.raw`
-      (function() {
+    // ── Extraction: plain JS string so esbuild never transforms it ────────────
+    // Double-escaped \\d etc. become \d inside the browser-evaluated string.
+    const postsRaw = await Promise.race([
+      page.evaluate(`(function() {
+        var MAX = ${MAX_POSTS_PER_SEARCH};
         var results = [];
         var seen = {};
+
+        // ── Helpers ──────────────────────────────────────────────────────────
         function parseNum(t) {
           if (!t) return 0;
-          var c = String(t).toLowerCase().replace(/,/g, '').trim();
-          var m = c.match(/([\\d\\.\\,]+)/);
+          var c = String(t).toLowerCase().replace(/,/g,'').trim();
+          var m = c.match(/(\\d+(?:\\.\\d+)?)/);
           if (!m) return 0;
-          var n = parseFloat(m[1].replace(/,/g, ''));
+          var n = parseFloat(m[1]);
           if (c.indexOf('k') !== -1) n *= 1000;
           if (c.indexOf('m') !== -1) n *= 1000000;
           return Math.round(n);
@@ -467,73 +513,102 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
         function normalizeUrl(href) {
           if (!href) return '';
           if (href.indexOf('http') !== 0) href = 'https://www.linkedin.com' + href;
-          href = href.split('?')[0].split('#')[0];
-          return href.replace(/\\/$/, '');
+          return href.split('?')[0].split('#')[0].replace(/\\/$/, '');
         }
 
-        // Phase 1: URN-based extraction (most stable)
+        // isPostUrl — accepts only genuine post URLs, never profile pages.
+        // Valid:   /feed/update/urn:li:activity:…
+        //          /posts/<slug>-<digits>          (public post on profile)
+        // Invalid: /in/<name>/recent-activity/    (profile activity tab)
+        //          /in/<name>                      (profile page)
+        function isPostUrl(url) {
+          if (!url) return false;
+          if (url.indexOf('/feed/update/urn:li:') !== -1) return true;
+          // /posts/ path must NOT be under /in/ (profile pages)
+          var postsIdx = url.indexOf('/posts/');
+          if (postsIdx !== -1 && url.indexOf('/in/') === -1) return true;
+          return false;
+        }
+
+        // ── Phase 1: URN-based (most reliable — builds canonical URL) ─────────
         var containers = Array.from(document.querySelectorAll(
           'li.artdeco-card, .feed-shared-update-v2[data-urn], .reusable-search__result-container, .entity-result, [data-chameleon-result-urn]'
         ));
-
         containers.forEach(function(container) {
-          var urnEl = container.querySelector('[data-urn*=\"activity\"], [data-urn*=\"ugcPost\"], .feed-shared-update-v2[data-urn]');
+          if (results.length >= MAX) return;
+          var urnEl = container.querySelector('[data-urn*="activity:"], [data-urn*="ugcPost:"], .feed-shared-update-v2[data-urn]');
           var urn = urnEl ? urnEl.getAttribute('data-urn') : null;
           if (urn && (urn.indexOf('urn:li:activity:') !== -1 || urn.indexOf('urn:li:ugcPost:') !== -1)) {
             var url = 'https://www.linkedin.com/feed/update/' + urn;
-            if (!seen[url]) {
-              seen[url] = true;
-              results.push({ url: url, likes: 0, comments: 0 });
-            }
+            if (!seen[url]) { seen[url] = true; results.push({ url: url, likes: 0, comments: 0, _container: container }); }
           }
         });
 
-        // Phase 2: Link-based extraction fallback
-        if (results.length < 5) {
-          var links = Array.from(document.querySelectorAll('a[href]'));
-          links.forEach(function(a) {
+        // ── Phase 2: Link fallback (only if Phase 1 found < 10 posts) ─────────
+        if (results.length < 10) {
+          Array.from(document.querySelectorAll('a[href]')).forEach(function(a) {
+            if (results.length >= MAX) return;
             var href = a.getAttribute('href') || '';
             if (!href) return;
-            if (href.indexOf('/feed/update/') === -1 && href.indexOf('/posts/') === -1) return;
             var url = normalizeUrl(href);
-            if (!url) return;
-            if (seen[url]) return;
+            if (!isPostUrl(url) || seen[url]) return;
             seen[url] = true;
-            results.push({ url: url, likes: 0, comments: 0 });
+            results.push({ url: url, likes: 0, comments: 0, _container: null });
           });
         }
 
-        // Phase 3: attempt engagement extraction by scanning nearby text
-        results = results.slice(0, 30);
+        // ── Phase 3: Engagement extraction ───────────────────────────────────
+        // Strategy A: aria-label on reaction/comment buttons (most accurate).
+        // Strategy B: text scan of the nearest LI/ARTICLE container (fallback).
         results.forEach(function(r) {
           var like = 0, comm = 0;
-          // best-effort: find any element containing the URL and then read parent text
           try {
-            var linkEl = document.querySelector('a[href*=\"' + r.url.replace('https://www.linkedin.com','') + '\"]');
-            var root = linkEl;
-            for (var i = 0; i < 8 && root && root.parentElement; i++) {
-              root = root.parentElement;
-              if (root.tagName === 'LI' || root.tagName === 'ARTICLE') break;
+            // Find the post container — prefer the stored reference, else search by link
+            var root = r._container || null;
+            if (!root) {
+              var path = r.url.replace('https://www.linkedin.com', '');
+              var linkEl = document.querySelector('a[href*="' + path + '"]');
+              root = linkEl;
+              for (var i = 0; i < 10 && root && root.parentElement; i++) {
+                root = root.parentElement;
+                if (root.tagName === 'LI' || root.tagName === 'ARTICLE') break;
+              }
             }
-            var text = root ? (root.innerText || '') : '';
-            var m1 = text.match(/([\\d\\.\\,km]+)\\s*(reaction|like)/i);
-            if (m1) like = parseNum(m1[1]);
-            var m2 = text.match(/([\\d\\.\\,km]+)\\s*comment/i);
-            if (m2) comm = parseNum(m2[1]);
-          } catch (e) {}
+            if (!root) return;
+
+            // Strategy A: aria-label attributes contain exact counts
+            // e.g. aria-label="234 reactions" or aria-label="12 comments"
+            var allEls = root.querySelectorAll('[aria-label]');
+            allEls.forEach(function(el) {
+              var label = (el.getAttribute('aria-label') || '').toLowerCase();
+              if (!like && (label.indexOf('reaction') !== -1 || label.indexOf('like') !== -1)) {
+                var lm = label.match(/([\\d,.km]+)/);
+                if (lm) like = parseNum(lm[1]);
+              }
+              if (!comm && label.indexOf('comment') !== -1) {
+                var cm = label.match(/([\\d,.km]+)/);
+                if (cm) comm = parseNum(cm[1]);
+              }
+            });
+
+            // Strategy B: text scan if aria-labels gave nothing
+            if (!like && !comm) {
+              var text = root.innerText || '';
+              var m1 = text.match(/([\\d.,km]+)\\s*(reaction|like)/i);
+              if (m1) like = parseNum(m1[1]);
+              var m2 = text.match(/([\\d.,km]+)\\s*comment/i);
+              if (m2) comm = parseNum(m2[1]);
+            }
+          } catch(e) {}
           r.likes = like;
           r.comments = comm;
+          delete r._container;  // don't serialise DOM nodes
         });
 
         return results;
-      })()
-    `;
-
-    // Never hang in page.evaluate
-    const postsRaw = await Promise.race([
-      page.evaluate(superScraper) as Promise<any[]>,
+      })()`) as Promise<any[]>,
       (async () => {
-        await sleep(20000);
+        await sleep(25000);
         throw new Error('EXTRACTION_TIMEOUT');
       })()
     ]).catch(async (err: any) => {
@@ -541,23 +616,20 @@ async function searchLinkedInPosts(keyword: string): Promise<PostCandidate[]> {
       await broadcastScreenshot(page!, `Extraction failed: ${err?.message || err}`).catch(() => {});
       return [];
     });
+    // ─────────────────────────────────────────────────────────────────────────
 
-    const posts = (Array.isArray(postsRaw) ? postsRaw : []).map((p: any) => ({
+    const posts = (Array.isArray(postsRaw) ? postsRaw : []).map((p: any): PostCandidate => ({
       url: p.url,
       author: 'Unknown',
       preview: '',
       likes: typeof p.likes === 'number' ? p.likes : 0,
       comments: typeof p.comments === 'number' ? p.comments : 0
-    })) as PostCandidate[];
+    }));
 
     console.log(`✅ Extracted ${posts.length} posts\n`);
-    
-    // Log sample post for debugging
     if (posts.length > 0) {
-      console.log('📋 Sample post:');
-      console.log(`   Author: ${posts[0].author}`);
-      console.log(`   Likes: ${posts[0].likes} | Comments: ${posts[0].comments}`);
-      console.log(`   URL: ${posts[0].url}\n`);
+      console.log(`📋 Sample: ${posts[0].url}`);
+      console.log(`   Likes: ${posts[0].likes} | Comments: ${posts[0].comments}\n`);
     }
 
     return posts;
@@ -658,26 +730,24 @@ async function savePostToDatabase(post: PostCandidate, keyword: string, userId: 
   }
 }
 
-// Select up to maxCount posts closest to the target reach (minLikes/minComments)
+// Return ALL posts with engagement sorted by closeness to target reach.
+// No arbitrary cap — the caller decides how many to use.
 function getClosestByReach(
   posts: PostCandidate[],
-  settings: WorkerSettings,
-  maxCount: number
+  settings: WorkerSettings
 ): PostCandidate[] {
   const targetLikes = settings.minLikes;
   const targetComments = settings.minComments;
 
   return posts
-    // Exclude posts with zero engagement (likely low-value or noise)
+    // Exclude posts with zero engagement (likely no data, not genuine zeros)
     .filter(p => p.likes > 0 || p.comments > 0)
     .map(p => {
       const likeDiff = Math.abs(p.likes - targetLikes);
       const commentDiff = Math.abs(p.comments - targetComments);
-      const distance = likeDiff + commentDiff;
-      return { post: p, distance };
+      return { post: p, distance: likeDiff + commentDiff };
     })
     .sort((a, b) => a.distance - b.distance)
-    .slice(0, maxCount)
     .map(x => x.post);
 }
 
