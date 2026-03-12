@@ -32,6 +32,26 @@ import {
 const prisma = new PrismaClient();
 
 // ============================================================================
+// GLOBAL CONSTANTS (Phase 11/14)
+// ============================================================================
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+];
+
+const VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+  { width: 1920, height: 1080 }
+];
+
+const LOCALES = ['en-US', 'en-GB', 'en-CA'];
+
+// ============================================================================
 // TYPES & INTERFACES
 // ============================================================================
 
@@ -776,44 +796,28 @@ async function initializeBrowser() {
     ]
   });
 
+  // Create single stealthy context
   context = await browser.newContext({
     userAgent: selectedUA,
     viewport: selectedViewport,
     locale: selectedLocale,
-    timezoneId: 'America/New_York'
-  });
-
-  // Create stealth context
-  context = await browser.newContext({
-    viewport: { width: 1920, height: 1080 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'en-US',
     timezoneId: 'America/New_York',
-    permissions: [],
-    // Add realistic browser properties
     deviceScaleFactor: 1,
     isMobile: false,
     hasTouch: false,
     colorScheme: 'light'
   });
 
+  page = await context.newPage();
+
   // Advanced stealth scripts
-  await context.addInitScript(() => {
-    // Hide webdriver
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => false
-    });
-
-    // Fix Chrome detection
-    (window as any).chrome = {
-      runtime: {}
-    };
-
-    // Add realistic plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5]
-    });
-
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    // @ts-ignore
+    window.chrome = { runtime: {} };
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    
     // Fix permissions
     const originalQuery = window.navigator.permissions.query;
     window.navigator.permissions.query = (parameters: any) => (
@@ -821,20 +825,22 @@ async function initializeBrowser() {
         ? Promise.resolve({ state: 'denied' } as PermissionStatus)
         : originalQuery(parameters)
     );
-
-    // Add realistic language
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en']
-    });
   });
-
-  page = await context.newPage();
 
   // Dismiss any dialogs
   page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
 
   isRunning = true;
   console.log('✅ Stealth browser initialized\n');
+  return { browser, context, page };
+}
+
+async function humanScroll(targetPage: Page, maxScrolls: number = 5) {
+  for (let i = 0; i < maxScrolls; i++) {
+    const scrollAmount = Math.floor(Math.random() * 400) + 300;
+    await targetPage.evaluate((amount) => window.scrollBy(0, amount), scrollAmount);
+    await randomSleep(800, 1500);
+  }
 }
 
 async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
@@ -1131,7 +1137,7 @@ async function main() {
   while (true) {
     try {
       await workerLoop();
-    } catch (error) {
+    } catch (error: any) {
       console.error('\n💥 CRITICAL: Supervisor caught unhandled error in workerLoop:', error.message);
       try {
         await broadcastError(`Supervisor Restoring Worker: ${error.message}`);
@@ -1170,7 +1176,7 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-main().catch(async (error) => {
+main().catch(async (error: any) => {
   console.error('💥 Fatal error:', error);
   await cleanup();
   process.exit(1);
