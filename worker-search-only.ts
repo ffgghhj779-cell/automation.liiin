@@ -759,29 +759,28 @@ function getClosestByReach(
 // ============================================================================
 
 async function initializeBrowser() {
-  console.log('🌐 Initializing stealth browser...\n');
+  const selectedUA = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+  const selectedViewport = VIEWPORTS[Math.floor(Math.random() * VIEWPORTS.length)];
+  const selectedLocale = LOCALES[Math.floor(Math.random() * LOCALES.length)];
 
-  // Determine headless mode from environment:
-  // - HEADLESS="true"  -> run headless
-  // - HEADLESS="false" -> run headed (visible)
-  // - not set          -> default to headless (safe for demos / local runs)
-  const headlessEnv = (process.env.HEADLESS || '').toLowerCase();
-  const isHeadless = headlessEnv !== 'false';
-
+  console.log(`🌐 Initializing stealth browser (${selectedUA.split(' ')[1]} / ${selectedViewport.width}x${selectedViewport.height})...`);
+  
   browser = await chromium.launch({
-    headless: isHeadless,
+    headless: process.env.HEADLESS === 'true',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
       '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-site-isolation-trials',
-      // Appear more human-like
-      '--window-size=1920,1080',
-      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      '--window-position=0,0'
     ]
+  });
+
+  context = await browser.newContext({
+    userAgent: selectedUA,
+    viewport: selectedViewport,
+    locale: selectedLocale,
+    timezoneId: 'America/New_York'
   });
 
   // Create stealth context
@@ -842,53 +841,28 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
   if (!page || !context) throw new Error('Browser not initialized');
 
   try {
-    console.log('🔐 Authenticating LinkedIn session (Phase 10: Cookie Sanitization)...');
+    console.log('🔐 Authenticating LinkedIn session (Phase 11: Resilience)...');
 
     const cleanCookie = sessionCookie.trim().replace(/^["']|["']$/g, '');
 
-    // 1. Visit UAS login page UNAUTHENTICATED to let LinkedIn set "Native" cookies
+    // 1. Acquire native session context
     console.log('   Acquiring native session context from LinkedIn...');
-    const initialResponse = await page.goto('https://www.linkedin.com/uas/login', { 
+    await page.goto('https://www.linkedin.com/uas/login', { 
       waitUntil: 'networkidle', 
       timeout: 35000 
-    }).catch(() => null);
+    }).catch(() => {});
 
-    // 2. Get the cookies set by LinkedIn natively and SANITIZE them
     const nativeCookies = await context.cookies();
     const nativeJSession = nativeCookies.find(c => c.name === 'JSESSIONID');
-    
-    // Phase 10: Strict quote removal for JSESSIONID
     let cleanJSession = nativeJSession ? nativeJSession.value.replace(/^["']|["']$/g, '') : `ajax:${Math.floor(Math.random() * 1000000000000000)}`;
 
-    if (nativeJSession) {
-       console.log('   Native JSESSIONID acquired (sanitized): ' + cleanJSession.substring(0, 15) + '...');
-    }
-
-    // 3. Inject user session cookie while preserving sanitized JSESSIONID
     await context.addCookies([
-      {
-        name: 'li_at',
-        value: cleanCookie,
-        domain: '.linkedin.com',
-        path: '/',
-        httpOnly: true,
-        secure: true,
-        sameSite: 'None'
-      },
-      {
-        name: 'JSESSIONID',
-        value: cleanJSession, // Use sanitized version
-        domain: '.linkedin.com',
-        path: '/',
-        httpOnly: false,
-        secure: true,
-        sameSite: 'None'
-      }
+      { name: 'li_at', value: cleanCookie, domain: '.linkedin.com', path: '/', httpOnly: true, secure: true, sameSite: 'None' },
+      { name: 'JSESSIONID', value: cleanJSession, domain: '.linkedin.com', path: '/', httpOnly: false, secure: true, sameSite: 'None' }
     ]);
 
     console.log('   Session context stabilized (li_at + JSESSIONID)');
 
-    // 4. Trace redirects/errors for diagnostics
     const redirectChain: string[] = [];
     const redirectListener = (response: any) => {
       const status = response.status();
@@ -900,64 +874,70 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
     await randomSleep(2000, 4000);
     
-    try {
-      console.log('   Navigating to feed...');
-      const feedResponse = await page.goto('https://www.linkedin.com/feed', {
-        waitUntil: 'networkidle',
-        timeout: 60000
-      });
+    const entryPoints = [
+      'https://www.linkedin.com/feed',
+      'https://www.linkedin.com/search/results/all/?keywords=linkedin' // Fallback entry point
+    ];
 
-      const finalStatus = feedResponse ? feedResponse.status() : 'No Response';
-      const finalUrl = page.url();
-      const pageTitle = await page.title().catch(() => 'No Title');
-
-      if (finalUrl.includes('/checkpoint/')) {
-        console.log('⚠️  SECURITY CHECKPOINT DETECTED: ' + finalUrl);
-        await broadcastLog('Login blocked by Security Checkpoint. Screenshot sent.', 'error');
-        await broadcastScreenshot(page, 'Security Checkpoint');
-        page.removeListener('response', redirectListener);
-        return false;
-      }
-
-      if (finalUrl.includes('/login') && !finalUrl.includes('feed')) {
-         console.log('❌ Session Invalid: Still on login page.');
-         page.removeListener('response', redirectListener);
-         return false;
-      }
-      
-      // Phase 10: Check for empty or blocked page
-      const isAuthenticated = await page.evaluate(() => {
-        const hasNav = document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
-        return !!hasNav;
-      });
-
-      if (isAuthenticated) {
-        console.log('✅ LinkedIn authentication successful\n');
-        page.removeListener('response', redirectListener);
-        await warmUpSession();
-        return true;
-      } else {
-        console.log(`❌ Verification failed at: ${finalUrl} (Status: ${finalStatus}, Title: "${pageTitle}")`);
-        const pageText = await page.evaluate(() => document.body.innerText.substring(0, 500).replace(/\n/g, ' ')).catch(() => '');
-        console.log(`   Page Content Snippet: "${pageText}..."`);
+    for (const url of entryPoints) {
+      try {
+        console.log(`   Navigating to entry point: ${url}...`);
+        const response = await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
         
-        await broadcastLog(`Verification failed on page: ${pageTitle} (Status: ${finalStatus}). See screenshot.`, 'warn');
-        await broadcastScreenshot(page, 'Auth Verification Failure');
-        page.removeListener('response', redirectListener);
-        return false;
-      }
+        const status = response ? response.status() : 0;
+        if (status === 429) {
+          console.log('⚠️  RATE LIMIT ENCOUNTERED (429). Cooling down for 5 minutes...');
+          await broadcastLog('LinkedIn Rate Limit (429) detected. Sleeping for 5 minutes.', 'warn');
+          page.removeListener('response', redirectListener);
+          await sleep(300000); // 5 minute cooldown
+          return false;
+        }
 
-    } catch (e: any) {
-      if (e.message.includes('ERR_TOO_MANY_REDIRECTS')) {
-        console.log('❌ REDIRECT LOOP DIAGNOSTICS:');
-        redirectChain.forEach(step => console.log('   ' + step));
-        await broadcastLog('Locked in redirect loop. Diagnostics logged to terminal.', 'error');
-        page.removeListener('response', redirectListener);
-        return false; 
+        const finalUrl = page.url();
+        if (finalUrl.includes('/checkpoint/')) {
+          console.log('⚠️  SECURITY CHECKPOINT DETECTED: ' + finalUrl);
+          await broadcastLog('Login blocked by Security Checkpoint. Manual action required.', 'error');
+          await broadcastScreenshot(page, 'Security Checkpoint');
+          page.removeListener('response', redirectListener);
+          return false;
+        }
+
+        const isAuthenticated = await page.evaluate(() => {
+          return !!document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
+        });
+
+        if (isAuthenticated) {
+          console.log('✅ LinkedIn authentication successful\n');
+          page.removeListener('response', redirectListener);
+          await warmUpSession();
+          return true;
+        } else {
+          console.log(`❌ Verification failed at ${finalUrl} (Status: ${status}, Title: "${await page.title().catch(() => '')}")`);
+          if (url === entryPoints[entryPoints.length - 1]) {
+             await broadcastScreenshot(page, 'Auth Verification Failure');
+             page.removeListener('response', redirectListener);
+             return false;
+          }
+          console.log('   Trying fallback entry point...');
+          continue;
+        }
+      } catch (e: any) {
+        if (e.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+           console.log('❌ REDIRECT LOOP DIAGNOSTICS:');
+           redirectChain.forEach(step => console.log('   ' + step));
+           if (url === entryPoints[entryPoints.length - 1]) {
+             page.removeListener('response', redirectListener);
+             return false;
+           }
+           console.log('   Trying fallback entry point...');
+           continue;
+        }
+        throw e;
       }
-      page.removeListener('response', redirectListener);
-      throw e;
     }
+    
+    page.removeListener('response', redirectListener);
+    return false;
 
   } catch (error: any) {
     console.error('❌ Critical Authentication Error:', error.message);
