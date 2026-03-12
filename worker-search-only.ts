@@ -842,10 +842,19 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
   try {
     console.log('🔐 Authenticating LinkedIn session...');
 
+    // Phase 6: Sanitize cookie
+    const cleanCookie = sessionCookie.trim().replace(/^["']|["']$/g, '');
+
+    // Phase 6: Establish technical context by visiting landing page first (pre-cookie)
+    try {
+      console.log('   Establishing session context...');
+      await page.goto('https://www.linkedin.com', { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    } catch {}
+
     // Set LinkedIn cookie
     await context.addCookies([{
       name: 'li_at',
-      value: sessionCookie,
+      value: cleanCookie,
       domain: '.linkedin.com',
       path: '/',
       httpOnly: true,
@@ -858,10 +867,20 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     // Navigate to feed with human-like delay
     await humanDelay(2000, 4000);
     
-    await page.goto('https://www.linkedin.com/feed', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
+    // Phase 6: Handle redirect loop potential by trying twice or detecting loops
+    try {
+      await page.goto('https://www.linkedin.com/feed', {
+        waitUntil: 'networkidle', // Wait for redirects to settle
+        timeout: 45000
+      });
+    } catch (e) {
+      if (e.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+        console.log('⚠️  Detected redirect loop. Attempting recovery reset...');
+        await broadcastLog('Redirect loop detected. Cleaning and retrying...', 'warn');
+        return false; // Let workerLoop re-init browser
+      }
+      throw e;
+    }
 
     await humanDelay(3000, 5000);
 
@@ -872,7 +891,6 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
       if (window.location.pathname.includes('/login')) return false;
       if (window.location.pathname.includes('/checkpoint')) return false;
       
-      // Check for navigation elements
       const hasNav = document.querySelector('nav[aria-label="Primary Navigation"], .global-nav');
       return !!hasNav;
     });
@@ -880,10 +898,7 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
     if (isAuthenticated) {
       console.log('✅ LinkedIn authentication successful\n');
       await broadcastScreenshot(page, 'Authenticated on LinkedIn');
-
-      // Warm up session with human-like browsing before searches
       await warmUpSession();
-
       return true;
     } else {
       console.log('❌ LinkedIn authentication failed\n');
@@ -893,164 +908,10 @@ async function authenticateLinkedIn(sessionCookie: string): Promise<boolean> {
 
   } catch (error: any) {
     console.error('❌ Authentication error:', error.message);
+    if (error.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+        return false; // Trigger reset
+    }
     return false;
-  }
-}
-
-// ============================================================================
-// CAPTCHA DETECTION & HANDLING
-// ============================================================================
-
-type CaptchaLevel = 'none' | 'soft' | 'hard';
-
-interface CaptchaDetection {
-  level: CaptchaLevel;
-  reason: string;
-  url?: string;
-  title?: string;
-  snippet?: string;
-}
-
-async function detectCaptcha(): Promise<CaptchaDetection> {
-  if (!page) {
-    return { level: 'none', reason: 'no-page' };
-  }
-
-  try {
-    const info = await page.evaluate(() => {
-      const url = window.location.href;
-      const path = window.location.pathname;
-      const title = document.title || '';
-      const rawText = (document.body?.innerText || '').toLowerCase();
-      const textSnippet = rawText.slice(0, 800);
-
-      const isCheckpoint =
-        path.includes('/checkpoint') ||
-        path.includes('/authwall') ||
-        url.includes('checkpoint') ||
-        url.includes('authwall');
-
-      const hasCaptchaElement = !!document.querySelector(
-        'iframe[src*=\"captcha\"], iframe[src*=\"recaptcha\"], div[id*=\"captcha\"], div[class*=\"captcha\"]'
-      );
-
-      const strongPhrases = [
-        "let's do a quick security check",
-        'unusual activity on your account',
-        'to help keep your account safe',
-        'we detected suspicious activity',
-        'we’ve detected suspicious activity',
-        'to continue, please verify your identity'
-      ];
-
-      const hasStrongPhrase = strongPhrases.some((phrase) =>
-        rawText.includes(phrase.toLowerCase())
-      );
-
-      return {
-        url,
-        path,
-        title,
-        textSnippet,
-        isCheckpoint,
-        hasCaptchaElement,
-        hasStrongPhrase
-      };
-    });
-
-    let level: CaptchaLevel = 'none';
-    let reason = 'no captcha indicators';
-
-    if (info.isCheckpoint || info.hasCaptchaElement) {
-      level = 'hard';
-      reason = 'checkpoint or captcha element detected';
-    } else if (info.hasStrongPhrase) {
-      level = 'soft';
-      reason = 'strong anti-bot phrase detected';
-    }
-
-    if (level !== 'none') {
-      console.log('\\n🚨 CAPTCHA / anti-bot signal detected');
-      console.log(`   URL: ${info.url}`);
-      console.log(`   Title: ${info.title}`);
-      console.log(`   Reason: ${reason}`);
-      console.log('   Snippet:', info.textSnippet?.slice(0, 200), '\\n');
-
-      await broadcastScreenshot(page, 'CAPTCHA / anti-bot signal detected').catch(() => {});
-      await broadcastLog(
-        `CAPTCHA / anti-bot signal (${level}): ${reason} at ${info.url}`,
-        level === 'hard' ? 'error' : 'warn'
-      ).catch(() => {});
-    }
-
-    return {
-      level,
-      reason,
-      url: info.url,
-      title: info.title,
-      snippet: info.textSnippet
-    };
-  } catch (err: any) {
-    console.error('detectCaptcha error:', err?.message || err);
-    return { level: 'none', reason: 'detection-error' };
-  }
-}
-
-async function handleCaptcha(detection: CaptchaDetection) {
-  console.log('\\n🚨 HARD CAPTCHA / CHECKPOINT DETECTED\\n');
-  console.log('   The system has paused to avoid further detection.');
-  console.log('   Please check the browser window for any security prompts or challenges.');
-  console.log('   A longer cool-down will be applied before resuming.\\n');
-
-  await broadcastError(
-    `⚠️ Hard CAPTCHA detected (${detection.reason}). Worker entering extended cool-down.`
-  );
-
-  // Longer cool-down for hard blocks (e.g. 20 minutes)
-  const cooldownMinutes = 20;
-  await broadcastStatus(`Hard CAPTCHA cool-down for ${cooldownMinutes} minutes`);
-  await sleep(cooldownMinutes * 60 * 1000);
-
-  console.log('⏰ Exiting hard CAPTCHA cool-down. Worker will cautiously resume.\n');
-  await broadcastStatus('Exiting hard CAPTCHA cool-down. Worker will cautiously resume.');
-}
-
-// ============================================================================
-// HUMAN-LIKE BEHAVIOR UTILITIES
-// ============================================================================
-
-async function humanDelay(minMs: number, maxMs: number) {
-  const delay = randomBetween(minMs, maxMs);
-  await sleep(delay);
-}
-
-async function humanScroll(page: Page) {
-  try {
-    // Random scroll patterns
-    const scrollCount = randomBetween(2, 5);
-    
-    for (let i = 0; i < scrollCount; i++) {
-      const scrollAmount = randomBetween(200, 600);
-      await page.evaluate((amount) => {
-        window.scrollBy({
-          top: amount,
-          behavior: 'smooth'
-        });
-      }, scrollAmount);
-      
-      await humanDelay(500, 1500);
-    }
-    
-    // Scroll back up
-    await page.evaluate(() => {
-      window.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-      });
-    });
-    
-  } catch {
-    // Ignore scroll errors
   }
 }
 
