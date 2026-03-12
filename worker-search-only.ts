@@ -79,6 +79,7 @@ let isRunning = false;
 let currentUserId: string | null = null;
 let currentSessionCookie: string | null = null;
 let isAuthenticated = false;
+let lastBrowserRestart = Date.now();
 
 // ============================================================================
 // DASHBOARD LOG MIRRORING (console -> SSE)
@@ -143,7 +144,7 @@ function enableDashboardConsoleMirroring() {
 // MAIN WORKER LOOP
 // ============================================================================
 
-async function main() {
+async function workerLoop() {
   console.log('\n🔍 LinkedIn Search-Only Worker - Starting...\n');
   console.log('📋 Mode: Search and save links ONLY (no auto-commenting)\n');
 
@@ -165,6 +166,13 @@ async function main() {
   await broadcastStatus('Starting search-only worker...');
 
   while (true) {
+      // Phase 5: Self-healing periodic browser restart (every 4-6 hours)
+      const browserAgeHours = (Date.now() - lastBrowserRestart) / (1000 * 60 * 60);
+      if (browserAgeHours > 6) {
+        console.log('\n🔄 Phase 5: Proactive browser restart to maintain stability (Age: ' + Math.round(browserAgeHours) + 'h)...\n');
+        await cleanup().catch(() => {});
+        lastBrowserRestart = Date.now();
+      }
     try {
       // Fetch settings
       const settings = await getActiveUserSettings();
@@ -1179,7 +1187,45 @@ async function isSystemStillActive(userId: string): Promise<boolean> {
 // STARTUP
 // ============================================================================
 
-process.on('SIGINT', async () => {
+
+// ============================================================================
+// SUPERVISOR & ERROR HANDLING (Phase 5)
+// ============================================================================
+
+async function main() {
+  console.log('\n🚀 LinkedIn Search-Only Worker Supervisor - Starting...\n');
+  
+  while (true) {
+    try {
+      await workerLoop();
+    } catch (error) {
+      console.error('\n💥 CRITICAL: Supervisor caught unhandled error in workerLoop:', error.message);
+      try {
+        await broadcastError(`Supervisor Restoring Worker: ${error.message}`);
+      } catch {}
+      
+      console.log('🔄 Supervisor: Performing full cleanup and restarting in 30 seconds...\n');
+      await cleanup().catch(() => {});
+      await sleep(30000); // Backoff before restart
+    }
+  }
+}
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🚨 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+  // Log and keep process alive - Supervisor or next cycle will handle it
+});
+
+process.on('uncaughtException', async (error) => {
+  console.error('🚨 UNCAUGHT EXCEPTION:', error);
+  // Controlled shutdown and let Supervisor-level or OS-level restarts handle it if possible
+  // For now, we try to cleanup and let the while(true) in main carry on if it's a non-fatal process error
+  if (error.message && error.message.includes('Prisma')) {
+    console.log('Database connection error. Supervisor will attempt reconnect.');
+  }
+});
+
+process.on("SIGINT", async () => {
   console.log('\n\n⏹️  Shutdown signal received...');
   await cleanup();
   process.exit(0);
