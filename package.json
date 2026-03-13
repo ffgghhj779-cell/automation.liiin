@@ -9,7 +9,7 @@
         "lint": "eslint .",
         "clean": "next clean",
         "worker": "tsx worker.ts",
-        "worker:search": "tsx worker-search-only.ts",
+        "worker:search": "tsx worker.ts",
         "test:recovery": "tsx test-account-recovery.ts",
         "postinstall": "prisma generate"
     },
