@@ -22,7 +22,8 @@ export async function GET() {
                     minDelayMins: 15,
                     maxDelayMins: 45,
                     systemActive: false,
-                    linkedinSessionCookie: ''
+                    linkedinSessionCookie: '',
+                    searchOnlyMode: true
                 }
             });
         }

@@ -14,11 +14,19 @@ interface WorkerEvent {
   };
 }
 
+interface ManualSubmitState {
+  isWaiting: boolean;
+  postUrl?: string;
+  commentPreview?: string;
+  instruction?: string;
+}
+
 export default function LiveWorkerViewer() {
   const [events, setEvents] = useState<WorkerEvent[]>([]);
   const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [manualSubmitState, setManualSubmitState] = useState<ManualSubmitState>({ isWaiting: false });
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Get current user ID from settings
@@ -61,6 +69,25 @@ export default function LiveWorkerViewer() {
         if (data.type === 'connected') {
           console.log('📡 Connected to live stream');
           return;
+        }
+
+        // Handle manual submit status
+        if (data.type === 'status' && data.data?.metadata?.status === 'WAITING_FOR_MANUAL_SUBMIT') {
+          setManualSubmitState({
+            isWaiting: true,
+            postUrl: data.data.metadata.postUrl,
+            commentPreview: data.data.metadata.commentText
+          });
+        } else if (data.type === 'action' && data.data?.metadata?.type === 'WAITING_FOR_MANUAL_SUBMIT') {
+          setManualSubmitState({
+            isWaiting: true,
+            postUrl: data.data.metadata.postUrl,
+            commentPreview: data.data.metadata.commentPreview,
+            instruction: data.data.metadata.instruction
+          });
+        } else if (data.type === 'status' && data.data?.metadata?.status === 'RUNNING') {
+          // Clear manual submit state when worker resumes
+          setManualSubmitState({ isWaiting: false });
         }
 
         // Add new event to the list
@@ -121,7 +148,58 @@ export default function LiveWorkerViewer() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-6">
+      {/* Manual Submit Alert Banner */}
+      {manualSubmitState.isWaiting && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 border-2 border-yellow-500/50 rounded-2xl p-6 backdrop-blur-sm"
+        >
+          <div className="flex items-start gap-4">
+            <div className="flex-shrink-0">
+              <div className="w-12 h-12 bg-yellow-500/20 rounded-full flex items-center justify-center animate-pulse">
+                <AlertCircle className="w-6 h-6 text-yellow-400" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-xl font-bold text-yellow-400 mb-2">⏸️ WAITING FOR MANUAL SUBMIT</h3>
+              <p className="text-white text-lg mb-4">
+                {manualSubmitState.instruction || 'Click the POST button in the browser window to submit the comment'}
+              </p>
+              
+              {manualSubmitState.commentPreview && (
+                <div className="bg-gray-900/50 rounded-lg p-4 mb-3">
+                  <p className="text-sm text-gray-400 mb-1">Comment Preview:</p>
+                  <p className="text-white font-mono text-sm">&quot;{manualSubmitState.commentPreview}&quot;</p>
+                </div>
+              )}
+              
+              {manualSubmitState.postUrl && (
+                <div className="bg-gray-900/50 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-gray-400 mb-1">Post URL:</p>
+                  <a 
+                    href={manualSubmitState.postUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:text-blue-300 text-sm break-all"
+                  >
+                    {manualSubmitState.postUrl}
+                  </a>
+                </div>
+              )}
+              
+              <div className="flex items-center gap-2 text-yellow-400">
+                <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>
+                <span className="text-sm font-semibold">Worker is paused - Waiting for you to click submit...</span>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Live Browser View */}
       <div className="bg-gray-800/50 border border-gray-700 rounded-2xl p-6 backdrop-blur-sm">
         <div className="flex items-center justify-between mb-4">
@@ -237,6 +315,7 @@ export default function LiveWorkerViewer() {
           </button>
         </div>
       </div>
+    </div>
     </div>
   );
 }
