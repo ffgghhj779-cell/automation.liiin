@@ -1,26 +1,32 @@
-# Use the official Playwright image which includes all browser dependencies
+# Use the official Playwright image
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files first for better caching
-COPY package*.json ./
-COPY prisma ./prisma/
+# Set up user permissions for Hugging Face (UID 1000)
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-# Install all dependencies (including devDeps for tsx)
+# Copy package files
+COPY --chown=user package*.json ./
+COPY --chown=user prisma ./prisma/
+
+# Install dependencies
 RUN npm install
 
 # Generate Prisma client
 RUN npx prisma generate
 
 # Copy the rest of the application
-COPY . .
+COPY --chown=user . .
 
-# Ensure the port is exposed
-EXPOSE 10000
+# Hugging Face Spaces port
+EXPOSE 7860
 
 # Start command: 
-# 1. Start a mini health-check server (inline) so Render sees the service as "live"
+# 1. Start a mini health-check server on port 7860 (Hugging Face default)
 # 2. Start the actual LinkedIn worker
-CMD npx tsx -e "require('http').createServer((q,res)=>{res.writeHead(200);res.end('ok')}).listen(process.env.PORT||10000); require('./worker.ts')"
+CMD npx tsx -e "require('http').createServer((q,res)=>{res.writeHead(200);res.end('ok')}).listen(7860); require('./worker.ts')"
